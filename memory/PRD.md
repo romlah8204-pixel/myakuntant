@@ -25,11 +25,15 @@ Aplikasi untuk usaha manufaktur fashion: pembelian bahan baku, produksi, persedi
 - Split kanal Marketplace → Shopee / Tokopedia / TikTok
 - Laporan keuangan dinamis (tidak hardcoded lagi)
 - Modul Siap Dijual dengan metrics + filter kanal
-- Backend testing 13/13 pass
+- Filter Periode Laporan (bulanan/kuartalan) + perbandingan periode sebelumnya
+- **Grafik Per Kanal** stacked bar 6 bulan di dashboard
+- **Ekspor PDF Laporan** via window.print dengan print CSS optimized
+- **Role Staf** (staff@liniar.id/Staff123!) — akses terbatas, tidak bisa lihat laporan atau kelola beban ops
+- **Beban Operasional Bertingkat** per bulan (CRUD, admin only) → laporan Laba Rugi kini pakai OpEx dinamis dari DB
+- Backend testing 39/39 PASS
 
 ## Backlog (P1/P2)
-- P1: Filter periode (bulan/kuartal) di laporan
-- P1: Role Staff (server-side enforcement) + halaman pengaturan
 - P2: HPP produksi granular (link ke bahan baku PO)
-- P2: Grafik penjualan per kanal (bukan hanya bar bulanan)
-- P2: Export laporan (PDF/CSV)
+- P2: Aggregation pipeline untuk sales-by-channel (perf)
+- P2: Soft-delete OpEx untuk audit trail
+- P2: Notifikasi stok kritis
