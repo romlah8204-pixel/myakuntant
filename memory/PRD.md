@@ -26,14 +26,20 @@ Aplikasi untuk usaha manufaktur fashion: pembelian bahan baku, produksi, persedi
 - Laporan keuangan dinamis (tidak hardcoded lagi)
 - Modul Siap Dijual dengan metrics + filter kanal
 - Filter Periode Laporan (bulanan/kuartalan) + perbandingan periode sebelumnya
-- **Grafik Per Kanal** stacked bar 6 bulan di dashboard
-- **Ekspor PDF Laporan** via window.print dengan print CSS optimized
-- **Role Staf** (staff@liniar.id/Staff123!) — akses terbatas, tidak bisa lihat laporan atau kelola beban ops
-- **Beban Operasional Bertingkat** per bulan (CRUD, admin only) → laporan Laba Rugi kini pakai OpEx dinamis dari DB
-- Backend testing 39/39 PASS
+- Grafik Per Kanal stacked bar 6 bulan di dashboard
+- Ekspor PDF Laporan via window.print dengan print CSS optimized
+- Role Staf (staff@liniar.id/Staff123!) — akses terbatas
+- Beban Operasional Bertingkat per bulan
+- **HPP Granular**: Produksi bisa tarik biaya bahan otomatis dari PO aktual (multi-line), decrement remaining_qty, breakdown detail per bahan
+- **Ubah Password Sendiri**: Halaman Profil dengan form ganti password (bcrypt verify + minimum 8 karakter)
+- Backend testing 54/54 PASS
 
-## Backlog (P1/P2)
-- P2: HPP produksi granular (link ke bahan baku PO)
-- P2: Aggregation pipeline untuk sales-by-channel (perf)
-- P2: Soft-delete OpEx untuk audit trail
-- P2: Notifikasi stok kritis
+## Backlog (P2)
+- Atomic decrement material_lines dengan concurrency guard
+- Token versioning untuk invalidate session lama saat change-password
+- Rate-limit on /api/auth/change-password
+- Pagination pada /api/purchases dan /api/opex
+- Aggregation pipeline untuk sales-by-channel (perf)
+- Soft-delete OpEx untuk audit trail
+- Notifikasi stok kritis (email/WhatsApp integration)
+- Backup otomatis ke cloud storage
