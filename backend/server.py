@@ -80,6 +80,12 @@ class PasswordChangeInput(BaseModel):
 def public_user(user):
     return {"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"]}
 
+def money_str(n):
+    try:
+        return f"Rp {int(round(float(n))):,}".replace(",", ".")
+    except Exception:
+        return "Rp 0"
+
 def token_for(user):
     return jwt.encode({"sub": user["id"], "exp": datetime.now(timezone.utc) + timedelta(hours=8)}, os.environ["JWT_SECRET"], algorithm="HS256")
 
@@ -99,6 +105,22 @@ async def admin_only(user=Depends(current_user)):
     if user.get("role") != "admin":
         raise HTTPException(403, "Akses hanya untuk administrator")
     return user
+
+async def log_activity(user, action: str, entity: str, entity_id: str, summary: str, details: dict = None):
+    """Write an audit trail entry. user may be None for anonymous events (e.g., failed login)."""
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": (user or {}).get("id"),
+        "user_email": (user or {}).get("email", "anonymous"),
+        "user_role": (user or {}).get("role", "anonymous"),
+        "action": action,
+        "entity": entity,
+        "entity_id": entity_id,
+        "summary": summary,
+        "details": details or {},
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await db.activity_logs.insert_one(doc)
 
 async def seed_data():
     await db.users.create_index("email", unique=True)
@@ -140,6 +162,7 @@ async def login(input: LoginInput, response: Response):
         raise HTTPException(401, "Email atau password tidak sesuai")
     await db.login_attempts.delete_one({"identifier": identifier})
     response.set_cookie("access_token", token_for(user), httponly=True, secure=True, samesite="none", max_age=28800, path="/")
+    await log_activity(user, "login", "auth", user["id"], f"Login berhasil: {user['email']}")
     return public_user(user)
 
 @api_router.post("/auth/logout")
@@ -188,6 +211,7 @@ async def create_sale(input: SaleInput, user=Depends(current_user)):
     if updated.modified_count != 1:
         raise HTTPException(409, "Stok berubah. Muat ulang persediaan lalu coba lagi")
     await db.sales_transactions.insert_one(doc)
+    await log_activity(user, "create", "sale", doc["id"], f"Penjualan {doc['invoice']} · {input.channel} · {input.quantity} {item.get('unit','pcs')} {input.sku} · {money_str(revenue)}", {"channel": input.channel, "sku": input.sku, "quantity": input.quantity, "revenue": revenue})
     doc.pop("_id", None)
     return doc
 
@@ -199,6 +223,7 @@ async def change_password(input: PasswordChangeInput, user=Depends(current_user)
         raise HTTPException(401, "Password lama tidak sesuai")
     new_hash = bcrypt.hashpw(input.new_password.encode(), bcrypt.gensalt()).decode()
     await db.users.update_one({"id": user["id"]}, {"$set": {"password_hash": new_hash}})
+    await log_activity(user, "change_password", "user", user["id"], f"Password diperbarui untuk {user['email']}")
     return {"message": "Password berhasil diperbarui"}
 
 @api_router.get("/purchases")
@@ -210,6 +235,7 @@ async def create_purchase(input: PurchaseInput, user=Depends(current_user)):
     total = input.quantity * input.unit_cost
     doc = {"id":str(uuid.uuid4()), "po":f"PO-{datetime.now().strftime('%y%m')}-{str(uuid.uuid4())[:4].upper()}", "supplier":input.supplier, "material":input.material, "quantity":input.quantity, "remaining_qty": input.quantity, "unit":input.unit, "unit_cost": input.unit_cost, "total":total, "status":"Diterima", "created_at": datetime.now(timezone.utc).isoformat()}
     await db.purchases.insert_one(doc)
+    await log_activity(user, "create", "purchase", doc["id"], f"PO {doc['po']} · {input.supplier} · {input.quantity} {input.unit} {input.material} · {money_str(total)}", {"supplier": input.supplier, "material": input.material, "total": total})
     doc.pop("_id", None)
     return doc
 
@@ -244,6 +270,7 @@ async def create_production(input: ProductionInput, user=Depends(current_user)):
     total = material_cost + input.labor_cost + input.overhead_cost
     doc = {"id": str(uuid.uuid4()), "batch": f"BTH-{datetime.now().strftime('%y%m%d')}-{str(uuid.uuid4())[:3].upper()}", "sku": input.sku, "product": input.product, "output_qty": input.output_qty, "material_cost": material_cost, "labor_cost": input.labor_cost, "overhead_cost": input.overhead_cost, "material_breakdown": material_breakdown, "total_cost": total, "hpp": round(total / input.output_qty, 2), "status": "Draft", "created_at": datetime.now(timezone.utc).isoformat()}
     await db.production.insert_one(doc)
+    await log_activity(user, "create", "production", doc["id"], f"Batch {doc['batch']} · {input.product} · {input.output_qty} unit · HPP {money_str(doc['hpp'])}/unit", {"sku": input.sku, "output_qty": input.output_qty, "hpp": doc["hpp"], "linked_lines": len(material_breakdown)})
     doc.pop("_id", None)
     return doc
 
@@ -316,15 +343,32 @@ async def create_opex(input: OpExInput, user=Depends(admin_only)):
         raise HTTPException(422, "Nominal tidak boleh negatif")
     doc = {"id": str(uuid.uuid4()), **input.model_dump(), "created_at": datetime.now(timezone.utc).isoformat()}
     await db.operating_expenses.insert_one(doc)
+    await log_activity(user, "create", "opex", doc["id"], f"Beban {input.category} · {input.period} · {money_str(input.amount)}", {"period": input.period, "category": input.category, "amount": input.amount})
     doc.pop("_id", None)
     return doc
 
 @api_router.delete("/opex/{opex_id}")
 async def delete_opex(opex_id: str, user=Depends(admin_only)):
+    existing = await db.operating_expenses.find_one({"id": opex_id}, {"_id": 0})
     r = await db.operating_expenses.delete_one({"id": opex_id})
     if r.deleted_count != 1:
         raise HTTPException(404, "Beban operasional tidak ditemukan")
+    if existing:
+        await log_activity(user, "delete", "opex", opex_id, f"Beban {existing.get('category')} · {existing.get('period')} · {money_str(existing.get('amount', 0))} dihapus", {"period": existing.get("period"), "category": existing.get("category"), "amount": existing.get("amount")})
     return {"deleted": opex_id}
+
+@api_router.get("/activity-logs")
+async def activity_logs(action: str = Query(""), entity: str = Query(""), user_email: str = Query(""), limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), user=Depends(admin_only)):
+    q = {}
+    if action:
+        q["action"] = action
+    if entity:
+        q["entity"] = entity
+    if user_email:
+        q["user_email"] = user_email
+    total = await db.activity_logs.count_documents(q)
+    rows = await db.activity_logs.find(q, {"_id": 0}).sort("created_at", -1).skip(offset).limit(limit).to_list(limit)
+    return {"total": total, "limit": limit, "offset": offset, "rows": rows}
 
 @api_router.get("/sales-by-channel")
 async def sales_by_channel(user=Depends(current_user)):
