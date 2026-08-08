@@ -1,0 +1,25 @@
+{
+  "summary": "Iterasi 10 backend testing selesai. 28/28 tests PASS (18 iter10 baru + 10 regression). Coverage penuh: POST /api/inventory/{sku}/photo (admin PNG/JPEG/WEBP → 200 dengan sku, photo_path, size, content_type; ekstensi jpg/webp benar; 404 SKU tidak ditemukan; 422 content-type invalid; 413 >3MB; 401 tanpa auth; 403 staff; overwrite mengganti photo_path+photo_updated_at); GET /api/inventory/{sku}/photo (200 bytes + Cache-Control + Content-Type=image/png; 404 belum ada; 401 no-auth); GET /api/inventory mengembalikan photo_path bila ada; DELETE /api/inventory/{sku}/photo (admin 200 {deleted:true}; 404 tanpa foto; 403 staff; GET berikutnya 404); activity_logs entity=inventory action=update dengan 'diunggah'+KB dan action=delete dengan 'dilepas'. Regression: auth/me, purchases, sales, reports, ready-to-sell, sales-by-channel, opex, backups, activity-logs list+CSV export semuanya OK.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter10_product_photos.py",
+    "/app/test_reports/pytest/iter10_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py sudah ~604 baris — sangat dekat threshold 700. Sangat direkomendasikan split modul (routes/inventory.py, routes/opex.py, routes/audit.py, routes/backups.py) sebelum iterasi berikutnya.",
+    "put_object/get_object berjalan di thread pool (asyncio.to_thread) — bagus. Namun ukuran file dibaca full ke memori sebelum validasi 3MB; untuk upload sedikit di atas limit tetap habiskan memori sebesar upload. Idealnya cek Content-Length header dulu (jika ada) atau stream+abort. Untuk 3MB cap ini masih aman.",
+    "photo_path disimpan sebagai path relatif storage; endpoint GET selalu proxy via backend (bagus untuk auth). Perlu diperhatikan Cache-Control 'private, max-age=300' — jika foto dioverwrite dalam <5 menit, klien mungkin serve stale. Pertimbangkan pakai photo_updated_at sebagai ETag atau query-string cache-buster.",
+    "DELETE menghapus dokumen inventory foto tapi TIDAK menghapus object di storage (orphan objects akan menumpuk seiring overwrite). Belum ada cleanup — untuk iterasi berikutnya pertimbangkan delete_object di storage.py.",
+    "Endpoint tidak memvalidasi bahwa payload sebenarnya file gambar valid (hanya cek MIME dari client-supplied header). Klien jahat bisa upload sembarang bytes dengan content_type='image/png'. Untuk MVP OK; hardening: gunakan python-magic atau PIL untuk verifikasi signature."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter10_product_photos.py"],
+  "success_rate": {"backend": "100% (28/28)", "frontend": "not tested (backend only)"},
+  "test_credentials": "admin@liniar.id / Liniar123!, staff@liniar.id / Staff123! — verified working",
+  "seed_data_creation": "Test meng-upload foto PNG/JPEG/WEBP kecil ke SKU seed (LIN-OVR-001, FAB-COT-042, LIN-PNT-008) via Emergent Object Storage. Beberapa foto di-delete pada test tapi bisa saja tersisa; storage tidak dibersihkan secara programatik (endpoint tidak menyediakan cleanup). Activity_logs mendapat beberapa entry update/delete inventory.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter10 (foto produk) hijau penuh 28/28. Setelah test suite: LIN-OVR-001 mungkin punya photo_path terbaru (test_delete_logs_delete_entry meng-upload lalu delete di akhir), FAB-COT-042 punya photo_path (dari test_inventory_returns_photo_path_when_present), LIN-PNT-008 tidak punya (dihapus di test). Storage bisa berisi banyak orphan file product-photos/{sku}/{uuid}.{ext}. Perhatian: server.py sudah 604 baris — kandidat kuat untuk refactor split modules. Test paralel (pytest-xdist loadscope) — jangan mengandalkan urutan test antara class. Untuk future iter, uji juga: cache-buster/ETag pada GET foto, cleanup storage saat DELETE, HEAD endpoint jika ditambah.",
+  "rca of the issue": "N/A - no issues"
+}

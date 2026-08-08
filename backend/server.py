@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Query, UploadFile, File
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -190,6 +190,53 @@ async def inventory(user=Depends(current_user)):
 async def ready_to_sell(user=Depends(current_user)):
     items = await db.inventory.find({"type": "Barang Jadi", "available": {"$gt": 0}}, {"_id": 0}).to_list(100)
     return [{**item, "ready_qty": item.get("available", 0), "sell_status": "Siap dijual" if item.get("available", 0) > 5 else "Stok terbatas"} for item in items]
+
+ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
+EXT_FROM_MIME = {"image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp"}
+
+@api_router.post("/inventory/{sku}/photo")
+async def upload_product_photo(sku: str, file: UploadFile = File(...), user=Depends(admin_only)):
+    item = await db.inventory.find_one({"sku": sku}, {"_id": 0})
+    if not item:
+        raise HTTPException(404, "SKU tidak ditemukan")
+    ct = (file.content_type or "").lower()
+    if ct not in ALLOWED_IMAGE_TYPES:
+        raise HTTPException(422, "Format tidak didukung. Pakai JPG, PNG, atau WEBP")
+    data = await file.read()
+    if len(data) > 3 * 1024 * 1024:
+        raise HTTPException(413, "Ukuran gambar maksimal 3 MB")
+    ext = EXT_FROM_MIME[ct]
+    path = f"{APP_NAME}/product-photos/{sku}/{uuid.uuid4()}.{ext}"
+    try:
+        result = await asyncio.to_thread(put_object, path, data, ct)
+    except Exception as e:
+        raise HTTPException(502, f"Gagal upload foto: {e}")
+    stored_path = result.get("path", path)
+    await db.inventory.update_one({"sku": sku}, {"$set": {"photo_path": stored_path, "photo_content_type": ct, "photo_size": result.get("size", len(data)), "photo_updated_at": datetime.now(timezone.utc).isoformat()}})
+    await log_activity(user, "update", "inventory", sku, f"Foto {sku} diunggah · {round(len(data)/1024, 1)} KB", {"content_type": ct, "size": len(data)})
+    return {"sku": sku, "photo_path": stored_path, "size": len(data), "content_type": ct}
+
+@api_router.get("/inventory/{sku}/photo")
+async def get_product_photo(sku: str, user=Depends(current_user)):
+    item = await db.inventory.find_one({"sku": sku}, {"_id": 0})
+    if not item or not item.get("photo_path"):
+        raise HTTPException(404, "Foto belum tersedia")
+    try:
+        data, content_type = await asyncio.to_thread(get_object, item["photo_path"])
+    except Exception as e:
+        raise HTTPException(502, f"Gagal ambil foto: {e}")
+    return Response(content=data, media_type=item.get("photo_content_type") or content_type, headers={"Cache-Control": "private, max-age=300"})
+
+@api_router.delete("/inventory/{sku}/photo")
+async def delete_product_photo(sku: str, user=Depends(admin_only)):
+    item = await db.inventory.find_one({"sku": sku}, {"_id": 0})
+    if not item or not item.get("photo_path"):
+        raise HTTPException(404, "Foto tidak ditemukan")
+    await db.inventory.update_one({"sku": sku}, {"$unset": {"photo_path": "", "photo_content_type": "", "photo_size": "", "photo_updated_at": ""}})
+    await log_activity(user, "delete", "inventory", sku, f"Foto {sku} dilepas")
+    return {"sku": sku, "deleted": True}
+
+
 
 @api_router.get("/sales")
 async def sales(user=Depends(current_user)):
