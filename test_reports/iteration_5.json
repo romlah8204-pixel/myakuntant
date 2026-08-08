@@ -1,0 +1,31 @@
+{
+  "summary": "Backend-only tests for iteration 5: role enforcement (staff vs admin), OpEx CRUD, /api/sales-by-channel, and dynamic OpEx integration into /api/reports. Added new test file /app/backend/tests/test_iter5_features.py with 16 tests. All 39/39 tests pass (16 new + 23 regression from iteration_4).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter5_features.py",
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/iter5_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py line 105-111: admin password is force-reset via bcrypt.checkpw on every startup; that's good, but seeded staff password is NEVER re-synced if changed in env — if you later add STAFF_PASSWORD env, mirror the admin update logic instead of hardcoding 'Staff123!' in seed.",
+    "OpEx endpoint uses `import re` inside the request handler (line 267) — move to top-level for micro-perf and clarity; same pattern is duplicated in /api/reports (lines 315, 319).",
+    "list_opex sorts by period string desc (works for YYYY-MM lexicographic ordering); when frontend adds sort by created_at, add compound sort — currently ties are non-deterministic.",
+    "_opex_total pulls all opex docs into memory (to_list(2000)) and filters in Python via _period_in_range. For higher volumes, do a MongoDB $gte/$lt on the period string (works because YYYY-MM sorts lex) instead of full-scan.",
+    "OpExInput lacks max_length on category/note — a large 'note' could bloat documents; add pydantic constraints (e.g., category: constr(min_length=1, max_length=80)).",
+    "sales-by-channel loops 6 separate DB queries (one per month); a single aggregation pipeline with $group on {year,month,channel} would be ~6x faster.",
+    "No pagination on GET /api/opex; UI listing every entry will degrade as OpEx grows. Add ?limit / ?offset.",
+    "OpEx deletion is hard-delete; consider soft-delete (deleted_at) so historical reports remain reproducible after admin deletes a row.",
+    "admin_only depends on current_user which raises 401 if token missing — that means an unauthenticated request to /api/opex POST returns 401 (not 403). Spec says 'staff -> 403' which is correct; just document the difference for the FE.",
+    "Reports operating_expense contract: 0 whenever channel != 'Semua'. Frontend must display an info hint ('OpEx dialokasikan ke total, bukan per kanal') to avoid user confusion when comparing per-channel net profit."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter5_features.py"],
+  "success_rate": {"backend": "100% (39/39)", "frontend": "N/A (not requested)"},
+  "test_credentials": "admin@liniar.id/Liniar123! and staff@liniar.id/Staff123! — both verified working, staff returns role='staff'",
+  "seed_data_creation": "Tests create TEST_ prefixed OpEx entries and delete them in teardown (via try/finally). TestOpExCRUD.test_full_crud_flow creates then deletes both entries. All Opex fixtures self-clean; no residual data left in DB.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "iteration 5 adds: role enforcement (admin_only on /reports and mutating /opex; staff can only GET /opex and use ops endpoints), OpEx CRUD, /api/sales-by-channel returning 6 months ascending ending at current month, dynamic OpEx integration into reports (channel=Semua only). Legacy hardcoded 3,840,000 OpEx is REMOVED — reports now reflect DB OpEx sum. Test file uses -n 2 loadscope (pytest.ini) safely because opex tests self-clean and don't share ids. Frontend not tested (backend-only scope). Auth cookies work via requests.Session as before.",
+  "rca of the issue": "N/A — no bugs found. All 4 features (role enforcement, OpEx CRUD, sales-by-channel, dynamic OpEx in reports) work per spec. cash_out now includes OpEx as expected (previous purchases+production sum + opex)."
+}

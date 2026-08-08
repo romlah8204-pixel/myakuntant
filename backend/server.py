@@ -66,6 +66,12 @@ class SaleInput(BaseModel):
     customer: str = "Pelanggan umum"
     order_ref: str = ""
 
+class OpExInput(BaseModel):
+    period: str
+    category: str
+    amount: float
+    note: str = ""
+
 def public_user(user):
     return {"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"]}
 
@@ -84,6 +90,11 @@ async def current_user(request: Request):
     except (jwt.InvalidTokenError, KeyError):
         raise HTTPException(401, "Sesi telah berakhir")
 
+async def admin_only(user=Depends(current_user)):
+    if user.get("role") != "admin":
+        raise HTTPException(403, "Akses hanya untuk administrator")
+    return user
+
 async def seed_data():
     await db.users.create_index("email", unique=True)
     # One-time migration: split legacy "Marketplace" channel into Shopee (default)
@@ -94,6 +105,10 @@ async def seed_data():
         await db.users.insert_one({"id": str(uuid.uuid4()), "email": admin_email, "password_hash": bcrypt.hashpw(os.environ["ADMIN_PASSWORD"].encode(), bcrypt.gensalt()).decode(), "name": "Pemilik Liniar", "role": "admin"})
     elif not bcrypt.checkpw(os.environ["ADMIN_PASSWORD"].encode(), existing["password_hash"].encode()):
         await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": bcrypt.hashpw(os.environ["ADMIN_PASSWORD"].encode(), bcrypt.gensalt()).decode()}})
+    # Seed demo staff account (only if not exists — never touches password if already exists)
+    staff_email = "staff@liniar.id"
+    if not await db.users.find_one({"email": staff_email}):
+        await db.users.insert_one({"id": str(uuid.uuid4()), "email": staff_email, "password_hash": bcrypt.hashpw(b"Staff123!", bcrypt.gensalt()).decode(), "name": "Staf Produksi", "role": "staff"})
     if await db.inventory.count_documents({}) == 0:
         await db.inventory.insert_many([
             {"id":"inv-1","sku":"LIN-OVR-001","name":"Overshirt Linen Terra","variant":"M / Terra","type":"Barang Jadi","stock":42,"available":36,"unit":"pcs","value":7560000,"status":"Sehat"},
@@ -215,11 +230,10 @@ def _period_range(granularity: str, period: str):
         return start.isoformat(), end.isoformat(), f"Q{q} {y}", p_start.isoformat(), p_end.isoformat(), f"Q{pq} {py}"
     raise HTTPException(422, "Granularity tidak valid")
 
-def _aggregate(sales_rows, purchase_rows, production_rows, channel_filter_all: bool):
+def _aggregate(sales_rows, purchase_rows, production_rows, operating_expense: float):
     revenue = sum(item.get("revenue", 0) for item in sales_rows)
     cogs = sum(item.get("cogs", 0) for item in sales_rows)
-    cash_out = sum(item.get("total", 0) for item in purchase_rows) + sum(item.get("total_cost", 0) for item in production_rows)
-    operating_expense = 3840000 if channel_filter_all else 0
+    cash_out = sum(item.get("total", 0) for item in purchase_rows) + sum(item.get("total_cost", 0) for item in production_rows) + operating_expense
     gross_profit = revenue - cogs
     net_profit = gross_profit - operating_expense
     cash_net = revenue - cash_out
@@ -230,8 +244,66 @@ def _pct(current, previous):
         return None if current == 0 else 100.0 if current > 0 else -100.0
     return round((current - previous) / abs(previous) * 100, 1)
 
+def _period_in_range(period_str, start_iso, end_iso):
+    """Check if a YYYY-MM period falls within [start_iso, end_iso)."""
+    if not start_iso:
+        return True
+    y, m = int(period_str[:4]), int(period_str[5:7])
+    d_iso = datetime(y, m, 15, tzinfo=timezone.utc).isoformat()
+    return start_iso <= d_iso < end_iso
+
+async def _opex_total(start_iso, end_iso, channel_all: bool):
+    if not channel_all:
+        return 0
+    rows = await db.operating_expenses.find({}, {"_id": 0}).to_list(2000)
+    return sum(r.get("amount", 0) for r in rows if _period_in_range(r.get("period", ""), start_iso, end_iso))
+
+@api_router.get("/opex")
+async def list_opex(user=Depends(current_user)):
+    return await db.operating_expenses.find({}, {"_id": 0}).sort("period", -1).to_list(500)
+
+@api_router.post("/opex")
+async def create_opex(input: OpExInput, user=Depends(admin_only)):
+    import re
+    if not re.match(r"^\d{4}-\d{2}$", input.period):
+        raise HTTPException(422, "Periode harus format YYYY-MM")
+    if input.amount < 0:
+        raise HTTPException(422, "Nominal tidak boleh negatif")
+    doc = {"id": str(uuid.uuid4()), **input.model_dump(), "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.operating_expenses.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.delete("/opex/{opex_id}")
+async def delete_opex(opex_id: str, user=Depends(admin_only)):
+    r = await db.operating_expenses.delete_one({"id": opex_id})
+    if r.deleted_count != 1:
+        raise HTTPException(404, "Beban operasional tidak ditemukan")
+    return {"deleted": opex_id}
+
+@api_router.get("/sales-by-channel")
+async def sales_by_channel(user=Depends(current_user)):
+    id_month = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
+    channels = ["Offline", "Bazar", "Shopee", "Tokopedia", "TikTok"]
+    now = datetime.now(timezone.utc)
+    months = []
+    for i in range(5, -1, -1):
+        y, m = now.year, now.month - i
+        while m <= 0:
+            m += 12
+            y -= 1
+        months.append((y, m))
+    rows = []
+    for y, m in months:
+        start = datetime(y, m, 1, tzinfo=timezone.utc).isoformat()
+        end = datetime(y + (m // 12), (m % 12) + 1, 1, tzinfo=timezone.utc).isoformat()
+        sales = await db.sales_transactions.find({"created_at": {"$gte": start, "$lt": end}}, {"_id": 0}).to_list(2000)
+        by_ch = {c: sum(s.get("revenue", 0) for s in sales if s.get("channel") == c) for c in channels}
+        rows.append({"label": id_month[m - 1], "year": y, "month": m, "channels": by_ch, "total": sum(by_ch.values())})
+    return {"months": rows, "channels": channels}
+
 @api_router.get("/reports")
-async def reports(channel: str = Query("Semua"), granularity: str = Query("all"), period: str = Query(""), user=Depends(current_user)):
+async def reports(channel: str = Query("Semua"), granularity: str = Query("all"), period: str = Query(""), user=Depends(admin_only)):
     valid_channels = {"Semua", "Offline", "Bazar", "Shopee", "Tokopedia", "TikTok"}
     if channel not in valid_channels:
         raise HTTPException(422, "Kanal laporan tidak valid")
@@ -239,6 +311,14 @@ async def reports(channel: str = Query("Semua"), granularity: str = Query("all")
         raise HTTPException(422, "Granularity tidak valid")
     if granularity != "all" and not period:
         raise HTTPException(422, "Period wajib diisi untuk granularity monthly/quarterly")
+    if granularity == "monthly":
+        import re
+        if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", period):
+            raise HTTPException(422, "Format period harus YYYY-MM (contoh 2026-08)")
+    if granularity == "quarterly":
+        import re
+        if not re.match(r"^\d{4}-Q[1-4]$", period):
+            raise HTTPException(422, "Format period harus YYYY-Qn (contoh 2026-Q3)")
     start, end, label, p_start, p_end, p_label = _period_range(granularity, period)
     channel_q = {} if channel == "Semua" else {"channel": channel}
     def range_q(s, e):
@@ -248,13 +328,15 @@ async def reports(channel: str = Query("Semua"), granularity: str = Query("all")
     sales = await db.sales_transactions.find({**channel_q, **range_q(start, end)}, {"_id": 0}).to_list(2000)
     purchases = await db.purchases.find(range_q(start, end), {"_id": 0}).to_list(2000)
     production = await db.production.find(range_q(start, end), {"_id": 0}).to_list(2000)
-    current = _aggregate(sales, purchases, production, channel == "Semua")
+    opex = await _opex_total(start, end, channel == "Semua")
+    current = _aggregate(sales, purchases, production, opex)
     previous = None
     if p_start:
         p_sales = await db.sales_transactions.find({**channel_q, **range_q(p_start, p_end)}, {"_id": 0}).to_list(2000)
         p_purchases = await db.purchases.find(range_q(p_start, p_end), {"_id": 0}).to_list(2000)
         p_production = await db.production.find(range_q(p_start, p_end), {"_id": 0}).to_list(2000)
-        previous = _aggregate(p_sales, p_purchases, p_production, channel == "Semua")
+        p_opex = await _opex_total(p_start, p_end, channel == "Semua")
+        previous = _aggregate(p_sales, p_purchases, p_production, p_opex)
     inventory = await db.inventory.find({}, {"_id": 0}).to_list(1000)
     inventory_value = sum(item.get("value", 0) for item in inventory)
     assets = inventory_value + max(current["cash_net"], 0)
