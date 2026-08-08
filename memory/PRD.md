@@ -1,37 +1,35 @@
-# PRD — Liniar Fashion Manufacturing OS
+# Liniar — Manufacturing OS PRD
 
-## Problem statement
-Aplikasi usaha manufaktur fashion untuk pembelian bahan baku, produksi, persediaan barang jadi, barang siap dijual, HPP, harga jual, laporan neraca/laba rugi/arus kas, grafik penjualan, dan dashboard stok.
+## Original Problem
+Aplikasi untuk usaha manufaktur fashion: pembelian bahan baku, produksi, persediaan barang jadi, siap dijual, HPP, harga jual, laporan keuangan (Neraca / Laba Rugi / Arus Kas), grafik penjualan, dashboard.
 
-## Architecture decisions
-- React JavaScript + React Router + CSS tokens untuk workspace responsif.
-- FastAPI + MongoDB melalui MONGO_URL/DB_NAME yang sudah tersedia.
-- JWT httpOnly cookie, bcrypt, role admin/staf, dan endpoint terproteksi.
-- HPP batch = bahan baku + tenaga kerja + overhead; format mata uang id-ID/Rp.
+## Architecture
+- Backend: FastAPI + Motor (MongoDB) + JWT via httpOnly cookie
+- Frontend: React (CRA/CRACO) + custom CSS (Liniar theme)
+- Auth: `admin@liniar.id` / `Liniar123!`
 
-## Personas
-- Admin pemilik/manajer: memantau performa, produksi, stok, dan laporan.
-- Staf pembelian/produksi/gudang: mencatat transaksi operasional harian.
+## Modules Implemented
+- Auth (login/logout/me, brute-force lock)
+- Dashboard KPI + chart
+- Pembelian (PO bahan baku)
+- Produksi (HPP per batch)
+- Persediaan (barang jadi + bahan baku)
+- Siap Dijual (filter kanal + ringkasan stok)
+- Penjualan multi-kanal (Offline, Bazar, Shopee, Tokopedia, TikTok) dengan auto-deduct stok
+- Laporan dinamis (Neraca / Laba Rugi / Arus Kas) dengan filter kanal + ringkasan per kanal
 
-## Core requirements (static)
-Dashboard KPI dan grafik; pembelian bahan; produksi batch dan HPP; persediaan; laporan bulanan Neraca, Laba Rugi, Arus Kas; login admin/staf.
+## Data Migration
+- Legacy channel "Marketplace" otomatis di-migrasi ke "Shopee" pada startup.
 
-## Implemented (2026-08-08)
-- Login demo admin, sesi httpOnly, logout, protected routes, lockout percobaan login.
-- Dashboard dengan KPI, grafik pendapatan, alert stok, antrean batch.
-- Form PO bahan baku dan form batch produksi dengan preview HPP setelah tersimpan.
-- Daftar persediaan dari API dan laporan interaktif tiga tab.
-- Modul penjualan multi-channel dengan invoice, validasi stok, pengurangan stok atomik, dan histori transaksi.
-- Responsive layout Atelier Ledger dengan test IDs dan status/error dasar.
+## Completed (Feb 2026)
+- Split kanal Marketplace → Shopee / Tokopedia / TikTok
+- Laporan keuangan dinamis (tidak hardcoded lagi)
+- Modul Siap Dijual dengan metrics + filter kanal
+- Backend testing 13/13 pass
 
-## Prioritized backlog
-- P0: tambah modul barang siap dijual yang mengurangi stok.
-- P0: alur penjualan Offline, Bazar, dan Marketplace dengan COGS serta laba kotor.
-- P1: form master produk/SKU, supplier, harga jual, dan konfigurasi margin.
-- P1: jurnal transaksi otomatis serta rekonsiliasi laporan dengan periode yang dapat dipilih.
-- P2: ekspor PDF/Excel, audit trail, dan manajemen user staf.
-
-## Next tasks
-1. Hubungkan transaksi penjualan dengan COGS dan arus kas.
-2. Tambahkan filter periode, pencarian tabel, dan validasi stok.
-3. Tambahkan role staf server-side dan halaman pengaturan.
+## Backlog (P1/P2)
+- P1: Filter periode (bulan/kuartal) di laporan
+- P1: Role Staff (server-side enforcement) + halaman pengaturan
+- P2: HPP produksi granular (link ke bahan baku PO)
+- P2: Grafik penjualan per kanal (bukan hanya bar bulanan)
+- P2: Export laporan (PDF/CSV)

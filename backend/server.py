@@ -86,6 +86,8 @@ async def current_user(request: Request):
 
 async def seed_data():
     await db.users.create_index("email", unique=True)
+    # One-time migration: split legacy "Marketplace" channel into Shopee (default)
+    await db.sales_transactions.update_many({"channel": "Marketplace"}, {"$set": {"channel": "Shopee"}})
     admin_email = os.environ["ADMIN_EMAIL"].lower()
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
