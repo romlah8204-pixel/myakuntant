@@ -373,6 +373,26 @@ async def activity_logs(action: str = Query(""), entity: str = Query(""), user_e
     rows = await db.activity_logs.find(q, {"_id": 0}).sort("created_at", -1).skip(offset).limit(limit).to_list(limit)
     return {"total": total, "limit": limit, "offset": offset, "rows": rows}
 
+@api_router.get("/activity-logs/export.csv")
+async def export_activity_logs(action: str = Query(""), entity: str = Query(""), user_email: str = Query(""), user=Depends(admin_only)):
+    import csv, io
+    q = {}
+    if action:
+        q["action"] = action
+    if entity:
+        q["entity"] = entity
+    if user_email:
+        q["user_email"] = user_email
+    rows = await db.activity_logs.find(q, {"_id": 0}).sort("created_at", -1).to_list(50000)
+    buf = io.StringIO()
+    writer = csv.writer(buf, quoting=csv.QUOTE_MINIMAL)
+    writer.writerow(["created_at", "user_email", "user_role", "action", "entity", "entity_id", "summary", "details"])
+    for r in rows:
+        writer.writerow([r.get("created_at", ""), r.get("user_email", ""), r.get("user_role", ""), r.get("action", ""), r.get("entity", ""), r.get("entity_id", ""), r.get("summary", ""), json.dumps(r.get("details", {}), ensure_ascii=False)])
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    filename = f"liniar-audit-{ts}.csv"
+    return Response(content=buf.getvalue(), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
 BACKUP_COLLECTIONS = ["purchases", "production", "sales_transactions", "inventory", "operating_expenses"]
 
 @api_router.post("/backups")
