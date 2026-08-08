@@ -11,6 +11,9 @@ import uuid
 from datetime import datetime, timezone, timedelta
 import bcrypt
 import jwt
+import json
+import asyncio
+from storage import init_storage, put_object, get_object, APP_NAME
 
 
 ROOT_DIR = Path(__file__).parent
@@ -369,6 +372,48 @@ async def activity_logs(action: str = Query(""), entity: str = Query(""), user_e
     total = await db.activity_logs.count_documents(q)
     rows = await db.activity_logs.find(q, {"_id": 0}).sort("created_at", -1).skip(offset).limit(limit).to_list(limit)
     return {"total": total, "limit": limit, "offset": offset, "rows": rows}
+
+BACKUP_COLLECTIONS = ["purchases", "production", "sales_transactions", "inventory", "operating_expenses"]
+
+@api_router.post("/backups")
+async def create_backup(user=Depends(admin_only)):
+    """Create a full business-data snapshot and upload to Emergent Object Storage."""
+    snapshot = {"generated_at": datetime.now(timezone.utc).isoformat(), "app": APP_NAME, "collections": {}}
+    counts = {}
+    for coll in BACKUP_COLLECTIONS:
+        rows = await db[coll].find({}, {"_id": 0}).to_list(100000)
+        snapshot["collections"][coll] = rows
+        counts[coll] = len(rows)
+    payload = json.dumps(snapshot, ensure_ascii=False, default=str).encode("utf-8")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    filename = f"liniar-{ts}.json"
+    path = f"{APP_NAME}/backups/{filename}"
+    try:
+        result = await asyncio.to_thread(put_object, path, payload, "application/json")
+    except Exception as e:
+        raise HTTPException(502, f"Gagal upload ke object storage: {e}")
+    doc = {"id": str(uuid.uuid4()), "filename": filename, "storage_path": result.get("path", path), "size": result.get("size", len(payload)), "counts": counts, "total_rows": sum(counts.values()), "created_at": datetime.now(timezone.utc).isoformat(), "created_by": user.get("email")}
+    await db.backups.insert_one(doc)
+    await log_activity(user, "create", "backup", doc["id"], f"Backup {filename} · {doc['total_rows']} baris · {round(doc['size']/1024, 1)} KB", counts)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.get("/backups")
+async def list_backups(user=Depends(admin_only)):
+    return await db.backups.find({}, {"_id": 0}).sort("created_at", -1).limit(200).to_list(200)
+
+@api_router.get("/backups/{backup_id}/download")
+async def download_backup(backup_id: str, user=Depends(admin_only)):
+    rec = await db.backups.find_one({"id": backup_id}, {"_id": 0})
+    if not rec:
+        raise HTTPException(404, "Backup tidak ditemukan")
+    try:
+        data, content_type = await asyncio.to_thread(get_object, rec["storage_path"])
+    except Exception as e:
+        raise HTTPException(502, f"Gagal ambil backup dari storage: {e}")
+    return Response(content=data, media_type="application/json", headers={"Content-Disposition": f'attachment; filename="{rec["filename"]}"'})
+
+
 
 @api_router.get("/sales-by-channel")
 async def sales_by_channel(user=Depends(current_user)):

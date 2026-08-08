@@ -1,0 +1,33 @@
+{
+  "summary": "Iteration 8 backup module fully tested: 10/10 PASS in test_iter8_backups.py. Full regression (iter5+iter6+iter7+iter8) = 58/58 PASS when run serially. Verified: POST /api/backups admin creates snapshot with proper filename pattern (liniar-YYYYMMDD-HHMMSS.json), size>0, counts for all 5 collections, total_rows=sum(counts), ISO created_at, created_by=admin email; POST without auth -> 401; staff -> 403. GET /api/backups admin lists descending by created_at; staff -> 403. GET /api/backups/{id}/download returns application/json with Content-Disposition attachment containing filename, JSON body has generated_at + app='liniar' + collections{purchases, production, sales_transactions, inventory, operating_expenses}. Downloaded row counts exactly match metadata counts. FORBIDDEN collections (users, activity_logs) confirmed absent from JSON payload. Non-existent id -> 404, staff download -> 403. activity_logs entry with entity=backup, action=create, entity_id matching, summary contains filename and total_rows. Object-storage round-trip works via Emergent Object Storage proxy (put_object + get_object).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "pytest infra", "issue": "Running iter5-8 with parallel xdist (addopts -n 2 --dist loadscope) causes iter5 OpEx tests to error and iter7 pagination to fail due to session/global state sharing across workers. Serial (-n 0) is 100% green. Pre-existing infra concern, not an iter8 regression."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter8_backups.py",
+    "/app/test_reports/pytest/iter8_results.xml",
+    "/app/test_reports/pytest/iter5_8_all.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py grew to 537 lines with backup endpoints inlined. Splitting into routers (auth, purchases, production, sales, opex, reports, activity_logs, backups) is now overdue.",
+    "backup endpoint calls asyncio.to_thread(put_object) which uses a single global _storage_key. init_storage() has no re-init on 401/expired-key path — if the storage key expires mid-runtime, backups will fail permanently until restart. Consider catching auth errors and re-initializing.",
+    "storage.py uses synchronous `requests` inside asyncio.to_thread. For large backups, this blocks a thread for full upload duration. Acceptable for MVP but flag for aiohttp/httpx-async in scale.",
+    "Backup payload uses json.dumps(default=str) — datetime and ObjectId become strings; downstream restore code will need matching parsing. Recommend Bson-safe extended-json format if restore is ever implemented.",
+    "backups collection has no index on created_at; list endpoint sorts on it. Add index in seed_data().",
+    "download endpoint streams entire body into memory via Response(content=data). For multi-MB backups this is fine, but consider StreamingResponse if snapshot grows past ~50MB.",
+    "No delete/retention endpoint for backups — history will grow unbounded in Mongo + object storage. Add TTL/retention policy (e.g., keep last N or last 30 days)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter8_backups.py", "/app/test_reports/iteration_8.json"],
+  "success_rate": {"backend": "100% (10/10 iter8, 58/58 iter5-8 serial)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "admin@liniar.id / Liniar123! ; staff@liniar.id / Staff123!",
+  "seed_data_creation": "1 real backup snapshot created and uploaded to Emergent Object Storage during test run (liniar-YYYYMMDD-HHMMSS.json). Adds one row to db.backups and one entry to activity_logs (entity=backup).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backup endpoints: POST /api/backups (admin), GET /api/backups (admin), GET /api/backups/{id}/download (admin). All wired to Emergent Object Storage via INTEGRATION_PROXY_URL + EMERGENT_LLM_KEY (storage.py). Object-storage calls latency 1-3s per put/get in this env — actual test finished in 2.6s so timeouts are fine at 30-120s. BACKUP_COLLECTIONS = purchases, production, sales_transactions, inventory, operating_expenses. Users/activity_logs deliberately excluded. When running full regression, use `pytest -n 0` (serial) to avoid iter5/iter7 flakes from cross-worker state sharing.",
+  "rca of the issue": "N/A - all backup functionality verified working end-to-end."
+}
