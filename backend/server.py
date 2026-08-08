@@ -82,6 +82,8 @@ async def seed_data():
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
         await db.users.insert_one({"id": str(uuid.uuid4()), "email": admin_email, "password_hash": bcrypt.hashpw(os.environ["ADMIN_PASSWORD"].encode(), bcrypt.gensalt()).decode(), "name": "Pemilik Liniar", "role": "admin"})
+    elif not bcrypt.checkpw(os.environ["ADMIN_PASSWORD"].encode(), existing["password_hash"].encode()):
+        await db.users.update_one({"email": admin_email}, {"$set": {"password_hash": bcrypt.hashpw(os.environ["ADMIN_PASSWORD"].encode(), bcrypt.gensalt()).decode()}})
     if await db.inventory.count_documents({}) == 0:
         await db.inventory.insert_many([
             {"id":"inv-1","sku":"LIN-OVR-001","name":"Overshirt Linen Terra","variant":"M / Terra","type":"Barang Jadi","stock":42,"available":36,"unit":"pcs","value":7560000,"status":"Sehat"},
@@ -97,9 +99,16 @@ async def startup():
 
 @api_router.post("/auth/login")
 async def login(input: LoginInput, response: Response):
-    user = await db.users.find_one({"email": input.email.lower()}, {"_id": 0})
+    identifier = input.email.lower()
+    attempt = await db.login_attempts.find_one({"identifier": identifier}, {"_id": 0})
+    if attempt and attempt.get("locked_until", "") > datetime.now(timezone.utc).isoformat():
+        raise HTTPException(429, "Terlalu banyak percobaan. Coba lagi dalam 15 menit")
+    user = await db.users.find_one({"email": identifier}, {"_id": 0})
     if not user or not bcrypt.checkpw(input.password.encode(), user["password_hash"].encode()):
+        failed = (attempt or {}).get("count", 0) + 1
+        await db.login_attempts.update_one({"identifier": identifier}, {"$set": {"count": failed, "locked_until": (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat() if failed >= 5 else ""}}, upsert=True)
         raise HTTPException(401, "Email atau password tidak sesuai")
+    await db.login_attempts.delete_one({"identifier": identifier})
     response.set_cookie("access_token", token_for(user), httponly=True, secure=True, samesite="none", max_age=28800, path="/")
     return public_user(user)
 
