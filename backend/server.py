@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Query
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -138,13 +138,18 @@ async def dashboard(user=Depends(current_user)):
 async def inventory(user=Depends(current_user)):
     return await db.inventory.find({}, {"_id":0}).to_list(100)
 
+@api_router.get("/ready-to-sell")
+async def ready_to_sell(user=Depends(current_user)):
+    items = await db.inventory.find({"type": "Barang Jadi", "available": {"$gt": 0}}, {"_id": 0}).to_list(100)
+    return [{**item, "ready_qty": item.get("available", 0), "sell_status": "Siap dijual" if item.get("available", 0) > 5 else "Stok terbatas"} for item in items]
+
 @api_router.get("/sales")
 async def sales(user=Depends(current_user)):
     return await db.sales_transactions.find({}, {"_id":0}).sort("created_at", -1).to_list(100)
 
 @api_router.post("/sales")
 async def create_sale(input: SaleInput, user=Depends(current_user)):
-    if input.channel not in {"Offline", "Bazar", "Marketplace"}:
+    if input.channel not in {"Offline", "Bazar", "Shopee", "Tokopedia", "TikTok"}:
         raise HTTPException(422, "Kanal penjualan tidak valid")
     if input.quantity < 1 or input.unit_price < 0:
         raise HTTPException(422, "Jumlah dan harga harus valid")
@@ -181,8 +186,31 @@ async def create_production(input: ProductionInput, user=Depends(current_user)):
     return doc
 
 @api_router.get("/reports")
-async def reports(user=Depends(current_user)):
-    return {"period":"Juni 2024","income":{"revenue":34200000,"cogs":22970000,"gross_profit":11230000,"operating_expense":3840000,"net_profit":7390000},"balance":{"assets":68350000,"liabilities":21800000,"equity":46550000},"cash":{"in":34200000,"out":26700000,"net":7500000}}
+async def reports(channel: str = Query("Semua"), user=Depends(current_user)):
+    valid_channels = {"Semua", "Offline", "Bazar", "Shopee", "Tokopedia", "TikTok"}
+    if channel not in valid_channels:
+        raise HTTPException(422, "Kanal laporan tidak valid")
+    query = {} if channel == "Semua" else {"channel": channel}
+    transactions = await db.sales_transactions.find(query, {"_id": 0}).to_list(1000)
+    revenue = sum(item.get("revenue", 0) for item in transactions)
+    cogs = sum(item.get("cogs", 0) for item in transactions)
+    purchases = await db.purchases.find({}, {"_id": 0}).to_list(1000)
+    production = await db.production.find({}, {"_id": 0}).to_list(1000)
+    cash_out = sum(item.get("total", 0) for item in purchases) + sum(item.get("total_cost", 0) for item in production)
+    inventory = await db.inventory.find({}, {"_id": 0}).to_list(1000)
+    inventory_value = sum(item.get("value", 0) for item in inventory)
+    operating_expense = 3840000 if channel == "Semua" else 0
+    gross_profit = revenue - cogs
+    net_profit = gross_profit - operating_expense
+    cash_net = revenue - cash_out
+    assets = inventory_value + max(cash_net, 0)
+    liabilities = 21800000
+    channel_summary = {}
+    if channel == "Semua":
+        for name in ["Offline", "Bazar", "Shopee", "Tokopedia", "TikTok"]:
+            rows = [t for t in transactions if t.get("channel") == name]
+            channel_summary[name] = {"revenue": sum(r.get("revenue", 0) for r in rows), "count": len(rows)}
+    return {"period": "Juni 2024", "channel": channel, "transaction_count": len(transactions), "income": {"revenue": revenue, "cogs": cogs, "gross_profit": gross_profit, "operating_expense": operating_expense, "net_profit": net_profit}, "balance": {"assets": assets, "liabilities": liabilities, "equity": assets - liabilities}, "cash": {"in": revenue, "out": cash_out, "net": cash_net}, "channel_summary": channel_summary}
 
 # Add your routes to the router instead of directly to app
 @api_router.get("/")
