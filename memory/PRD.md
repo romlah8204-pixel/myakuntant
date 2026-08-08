@@ -32,7 +32,7 @@ Aplikasi untuk usaha manufaktur fashion: pembelian bahan baku, produksi, persedi
 - Beban Operasional Bertingkat per bulan
 - **HPP Granular**: Produksi bisa tarik biaya bahan otomatis dari PO aktual (multi-line), decrement remaining_qty, breakdown detail per bahan
 - **Ubah Password Sendiri**: Halaman Profil dengan form ganti password (bcrypt verify + minimum 8 karakter)
-- **Audit Log Aktivitas**: Setiap login, buat PO, batch produksi, penjualan, beban ops (create/delete), dan ganti password tercatat ke collection `activity_logs` dengan (siapa/kapan/apa/details). Halaman "Audit Log" (admin only) dengan filter action/entity/user + pagination
+- **Audit Log Aktivitas**: Setiap login, buat PO, batch produksi, penjualan, beban ops (create/delete), dan ganti password tercatat ke collection `activity_logs` dengan (siapa/kapan/apa/details). Halaman "Audit Log" (admin only) dengan filter action/entity/user + pagination + tombol **Ekspor CSV** yang menghormati filter aktif
 - **Backup Manual ke Emergent Object Storage**: Tombol "Backup sekarang" (admin only) menyimpan snapshot 5 collection bisnis (purchases, production, sales_transactions, inventory, operating_expenses) ke cloud storage sebagai JSON. Halaman "Backup" dengan riwayat + tombol unduh per entri. Users & activity_logs sengaja dikecualikan.
 - Backend testing 58/58 PASS (iter5+iter6+iter7+iter8 kumulatif)
 
