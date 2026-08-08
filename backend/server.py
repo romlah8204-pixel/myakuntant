@@ -58,6 +58,14 @@ class ProductionInput(BaseModel):
     labor_cost: float
     overhead_cost: float
 
+class SaleInput(BaseModel):
+    channel: str
+    sku: str
+    quantity: int
+    unit_price: float
+    customer: str = "Pelanggan umum"
+    order_ref: str = ""
+
 def public_user(user):
     return {"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"]}
 
@@ -129,6 +137,30 @@ async def dashboard(user=Depends(current_user)):
 @api_router.get("/inventory")
 async def inventory(user=Depends(current_user)):
     return await db.inventory.find({}, {"_id":0}).to_list(100)
+
+@api_router.get("/sales")
+async def sales(user=Depends(current_user)):
+    return await db.sales_transactions.find({}, {"_id":0}).sort("created_at", -1).to_list(100)
+
+@api_router.post("/sales")
+async def create_sale(input: SaleInput, user=Depends(current_user)):
+    if input.channel not in {"Offline", "Bazar", "Marketplace"}:
+        raise HTTPException(422, "Kanal penjualan tidak valid")
+    if input.quantity < 1 or input.unit_price < 0:
+        raise HTTPException(422, "Jumlah dan harga harus valid")
+    item = await db.inventory.find_one({"sku": input.sku}, {"_id": 0})
+    if not item:
+        raise HTTPException(404, "SKU tidak ditemukan di persediaan")
+    if item.get("available", 0) < input.quantity:
+        raise HTTPException(409, f"Stok tersedia hanya {item.get('available', 0)} {item.get('unit', 'pcs')}")
+    unit_cost = item.get("value", 0) / max(item.get("stock", 1), 1)
+    revenue = input.quantity * input.unit_price
+    cogs = input.quantity * unit_cost
+    doc = {"id": str(uuid.uuid4()), "invoice": f"INV-{datetime.now().strftime('%y%m%d')}-{str(uuid.uuid4())[:4].upper()}", **input.model_dump(), "revenue": revenue, "cogs": round(cogs, 2), "gross_profit": round(revenue - cogs, 2), "created_at": datetime.now(timezone.utc).isoformat(), "status": "Lunas"}
+    await db.inventory.update_one({"sku": input.sku}, {"$inc": {"stock": -input.quantity, "available": -input.quantity}})
+    await db.sales_transactions.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
 
 @api_router.post("/purchases")
 async def create_purchase(input: PurchaseInput, user=Depends(current_user)):
