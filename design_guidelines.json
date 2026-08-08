@@ -1,0 +1,140 @@
+{
+  "project": {
+    "name": "Liniar — Fashion Manufacturing OS",
+    "language": "id-ID",
+    "currency": "IDR (Rp)",
+    "context": "Hybrid fullstack dashboard/admin application",
+    "stack": "FastAPI + React JavaScript + Tailwind CSS + shadcn/ui primitives",
+    "theme": "Light-first, optional dark mode",
+    "audience": ["Admin pemilik/manajer", "Staf pembelian", "Staf produksi", "Staf gudang", "Finance"],
+    "success_actions": ["Membuat PO bahan baku", "Mencatat batch produksi dan HPP", "Mengetahui stok kritis", "Mengecek barang siap dijual", "Menutup laporan bulanan"],
+    "emotional_tone": "tenang, presisi, membumi, seperti meja kerja atelier yang sangat teratur"
+  },
+  "design_exploration": [
+    {"name": "Atelier Ledger", "probability": 0.32, "description": "Dashboard operasional dengan nuansa kertas hangat, garis grid tipis, serif editorial untuk judul, dan amber sebagai satu-satunya aksen aksi. Menggabungkan accounting ledger, pola jahit, dan Swiss information design."},
+    {"name": "Cut Floor Control", "probability": 0.24, "description": "Tampilan high-clarity untuk lantai produksi: putih tulang, ink navy, blok merah bata untuk exception, tabel padat, dan status produksi berbentuk label potongan kain. Menggabungkan control room, workwear, dan katalog mode."},
+    {"name": "Dye House Signals", "probability": 0.18, "description": "Dashboard lebih ekspresif dengan field warna kecil dari dye swatches, chart sebagai pita material, dan panel status asimetris. Menggabungkan color lab, dashboard manufaktur, dan editorial magazine."},
+    {"name": "Quiet Warehouse", "probability": 0.16, "description": "Minimal cardless, banyak ruang napas, fokus pada saldo stok dan rekonsiliasi. Menggabungkan arsitektur modern, wayfinding gudang, dan buku kas."},
+    {"name": "Pattern Room", "probability": 0.10, "description": "Grid Tetris untuk ringkasan eksekutif; angka HPP dan margin menjadi pola modular seperti pattern cutting. Lebih berani secara visual tetapi tetap flat dan accessible."}
+  ],
+  "chosen_direction": {
+    "name": "Atelier Ledger",
+    "reason": "Paling tepat untuk bisnis manufaktur fashion skala kecil-menengah: hangat dan manusiawi bagi staf, tetapi cukup terstruktur untuk laporan keuangan. Memadukan editorial serif, ledger accounting, pola jahit, dan Swiss grid tanpa menjadi template ERP generik.",
+    "pattern_breaks": ["Tidak memakai gradient dashboard atau rounded cards berlebihan", "Sidebar dan tabel memakai garis struktur seperti kertas pola", "Aksen amber hanya untuk tindakan dan perhatian, bukan dekorasi", "Asimetri kecil pada dashboard memberi rasa atelier tanpa mengurangi scanability"]
+  },
+  "research_descriptors": [
+    {"source": "iFactory manufacturing dashboard guide 2026", "url": "https://ifactoryapp.com/analytics-reporting/manufacturing-dashboards-that-get-used-design-guide-2026", "descriptor": "Role-specific dashboards, 3–7 primary metrics, critical metrics visible before scroll, drill-down for detail."},
+    {"source": "Klipfolio inventory dashboard examples", "url": "https://www.klipfolio.com/resources/dashboard-examples/supply-chain/inventory-dashboard", "descriptor": "Operational stock metrics paired with financial value, inventory velocity, aging, and health indicators."},
+    {"source": "Shadcn inventory dashboard blocks", "url": "https://www.shadcn.io/blocks/dashboard-inventory-levels", "descriptor": "Filter pills, status-coded stock rows, compact KPI blocks, and chart/table adjacency for operational scanning."},
+    {"source": "Materio supply inventory dashboard", "url": "https://www.designmonks.co/projects/materio-unified-supply-dashboard", "descriptor": "Unified supplier and inventory view reduces cognitive load; use clear status hierarchy and grouped workflows."}
+  ],
+  "typography": {
+    "heading": "Cormorant Garamond",
+    "body": "IBM Plex Sans",
+    "numeric": "IBM Plex Mono",
+    "heading_rules": "H1 text-4xl sm:text-5xl lg:text-6xl max, tracking-tight, font-[600]; H2 text-2xl sm:text-3xl lg:text-4xl; H3 text-xl sm:text-2xl.",
+    "body_rules": "Base text-base, dense table text-sm, leading-relaxed for explanatory copy.",
+    "labels": "Uppercase text-xs tracking-[0.2em] font-medium.",
+    "font_loading": "Use @import from Google Fonts or self-host; never use Inter/Roboto for headings."
+  },
+  "colors": {
+    "archetype": "Organic & Earthy with Swiss functional contrast",
+    "tokens": {
+      "canvas": "#F5F1E8",
+      "surface": "#FFFDF8",
+      "surface_warm": "#EEE7D9",
+      "ink": "#20242A",
+      "ink_muted": "#586068",
+      "line": "#D8D1C4",
+      "primary": "#A34B2B",
+      "primary_hover": "#7F351F",
+      "primary_foreground": "#FFFDF8",
+      "success": "#356B52",
+      "warning": "#B7791F",
+      "danger": "#A33A36",
+      "info": "#315C78",
+      "dark_footer": "#293238"
+    },
+    "usage": "95% neutral surfaces/ink, amber-terra only for CTA and active states, green for healthy stock, red for blocking exceptions. No full-screen gradients; never pure #000000 or #808080.",
+    "contrast": "Verify normal text at 4.5:1 minimum and large text at 3:1; use ink on canvas/surface and white only on primary/dark footer."
+  },
+  "layouts": {
+    "app_shell": "Desktop: fixed left sidebar w-64 with solid canvas background and border-r; topbar h-20 with opaque surface, border-b, z-50. Main uses ml-64 px-8 py-10. Mobile: topbar + Sheet sidebar.",
+    "dashboard": "Mobile-first grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6 align-items-start. KPI summary spans 1 column each; sales chart col-span-2 row-span-2; stock alerts col-span-1 row-span-2; production queue col-span-1; financial snapshot col-span-2.",
+    "tetris_variant": "For overview only: hero chart md:col-span-8 lg:col-span-7 row-span-2; alert list md:col-span-4 lg:col-span-3 row-span-2; two compact metrics fill remaining cells. Leave one intentional breathing cell on large screens.",
+    "tables": "Flat rectangular table with border-collapse-like dividers, sticky header, left aligned labels, right aligned currency/quantity, row hover with explicit ink color. Use pagination and filter toolbar.",
+    "forms": "Two-column desktop form, one-column mobile; section headings separated by generous py-8; Shadcn Input, Select, Calendar, Checkbox, Dialog—not native select/date inputs.",
+    "reporting": "Report header with month selector and export action; summary numbers first, then chart, then detailed ledger/table. Print-friendly white surface.",
+    "spacing": "Use p-6/p-8 inside bordered containers, gap-6/gap-8 between regions, py-12 section breaks. Avoid cramped p-4 except dense table rows."
+  },
+  "components": [
+    {"name": "AppShell", "component_path": "src/components/layout/AppShell.js", "instructions": "Sidebar navigation links: Dashboard, Pembelian, Produksi, Persediaan, Barang Siap Dijual, Penjualan, Laporan, Pengaturan. Include role-aware visibility and user menu."},
+    {"name": "DashboardOverview", "component_path": "src/pages/DashboardOverview.js", "instructions": "KPI strip, revenue chart, stock health, production queue, financial snapshot, alerts. Keep primary metrics to 5–7."},
+    {"name": "MetricTile", "component_path": "src/components/dashboard/MetricTile.js", "instructions": "Flat surface, 1px border, tiny overline, large IBM Plex Mono value, trend text, optional status dot."},
+    {"name": "DataTable", "component_path": "src/components/shared/DataTable.js", "instructions": "Use shadcn Table, Pagination, Badge, DropdownMenu. Include empty/loading/error states and row actions."},
+    {"name": "PurchaseOrderForm", "component_path": "src/pages/purchases/PurchaseOrderForm.js", "instructions": "Use shadcn Form/Input/Select/Calendar; line items support SKU bahan, supplier, satuan pcs/meter/kg, quantity, unit cost, tax, expected date."},
+    {"name": "ProductionBatchForm", "component_path": "src/pages/production/ProductionBatchForm.js", "instructions": "Batch number, finished SKU, size/color variants, material consumption, labor, overhead, output quantity, calculated HPP preview."},
+    {"name": "InventoryHealth", "component_path": "src/components/inventory/InventoryHealth.js", "instructions": "Tabs bahan baku/WIP/barang jadi/siap dijual; stock cards remain flat and status-driven."},
+    {"name": "FinancialReports", "component_path": "src/pages/reports/FinancialReports.js", "instructions": "Tabs Neraca, Laba Rugi, Arus Kas; monthly period control, export, reconciliation notices."},
+    {"name": "AuthScreen", "component_path": "src/pages/auth/Login.js", "instructions": "Solid warm surface, no image dependency, role-aware redirect after login, accessible error message."}
+  ],
+  "data_model_ui": {
+    "product": ["SKU", "nama", "kategori", "ukuran", "warna", "satuan", "harga_jual", "reorder_point"],
+    "purchase": ["PO number", "supplier", "tanggal", "status", "line items", "subtotal", "total"],
+    "production": ["batch number", "SKU output", "tanggal", "qty output", "material cost", "labor cost", "overhead cost", "HPP per unit", "status"],
+    "inventory": ["SKU", "variant", "location", "on hand", "reserved", "available", "unit cost", "stock value", "status"],
+    "financial": ["period", "revenue", "COGS", "gross profit", "assets", "liabilities", "equity", "cash in", "cash out"]
+  },
+  "motion": {
+    "principles": "Motion communicates status, not decoration.",
+    "entrance": "Stagger dashboard sections 60ms each with opacity and translateY only.",
+    "interactive": "Buttons use transform translateY(-1px) and background-color; rows use background-color; no transition-all.",
+    "loading": "Use shadcn Skeleton with subtle pulse for tables/cards; show progress for batch calculation.",
+    "toast": "Use Sonner for saved PO, batch posted, export complete, and validation errors.",
+    "reduced_motion": "@media (prefers-reduced-motion: reduce) sets animation-duration: 0.01ms and transition-duration: 0.01ms; preserve focus and state changes."
+  },
+  "visual_enhancers": {
+    "grain": "Optional low-opacity CSS noise texture on canvas only; keep content surfaces solid.",
+    "pattern": "Use thin repeating diagonal line motif at 3–5% opacity in empty dashboard zones, inspired by fabric pattern paper.",
+    "icons": "Use lucide-react, 16–20px, stroke 1.75; never emoji icons.",
+    "surfaces": "Solid warm surfaces, 1px tinted borders, minimal shadow. Use glass only for opaque-ish mobile sheet/topbar with backdrop-blur-xl and bg-white/85.",
+    "scrollbar": "Customize scrollbar thumb in muted terra/ink; no gutter."
+  },
+  "accessibility": {
+    "test_ids": "Every button, link, input, menu, table status, KPI value, toast confirmation, error, and auth control needs kebab-case data-testid such as dashboard-revenue-card, purchase-submit-button, inventory-low-stock-row.",
+    "keyboard": "Visible high contrast focus-visible ring 2px primary with 2px offset; all dialogs trap focus.",
+    "semantics": "Use main/nav/header/section/table landmarks, explicit labels, aria-live for calculation and toast status, aria-hidden for decorative patterns.",
+    "roles": "Admin can manage users/settings and post financial reports; staf can create operational transactions but cannot manage users or close periods. Enforce server-side RBAC too.",
+    "localization": "Format with id-ID: Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR' }); dates as DD MMM YYYY; do not abbreviate Rp values ambiguously."
+  },
+  "media": {
+    "strategy": "No stock photos required for the core authenticated ERP; data and work status are the subject. This avoids decorative media competing with operational tasks.",
+    "image_urls": [],
+    "image_categories": []
+  },
+  "3d_libraries": {"chosen": false, "reason": "Clarity and transaction accuracy outweigh immersion for a manufacturing admin app.", "libraries": [], "steps": []},
+  "general_ui_ux_design_guidelines": [
+    "Every page has visible navigation with brand, 3–5 key links on desktop, and primary contextual CTA.",
+    "Never use fully transparent header, dropdown, overlay, or content surface; use solid or opaque backgrounds.",
+    "Do not center the whole application container or use text-align:center globally; align operational content left.",
+    "Avoid generic SaaS blue, purple, excessive rounded cards, full-screen gradients, and uniform equal-size bento tiles.",
+    "Use shadcn primitives for interactions and raw Tailwind/HTML for structural layouts; customize their defaults.",
+    "Use Sonner for feedback; use DropdownMenu instead of native select and Calendar instead of date input.",
+    "Use direct grid children; if animated, the motion wrapper itself owns the grid span classes.",
+    "All hover states explicitly set foreground color; focus states have higher contrast than default.",
+    "All figures must have a visible unit and period; charts need legends, accessible summaries, and color-blind-safe colors.",
+    "Provide loading, empty, error, permission-denied, and success states for every async workflow."
+  ],
+  "implementation_steps": [
+    "Add font loading and replace default global font tokens in src/index.css; use tinted neutral CSS variables.",
+    "Build AppShell and responsive role-aware navigation in JavaScript files under src/components/layout.",
+    "Implement dashboard with mock API adapters clearly isolated behind services; replace mocks with FastAPI endpoints before production.",
+    "Implement purchase, production batch, inventory, ready-to-sell, pricing, and reports routes in that order.",
+    "Add calculation previews for HPP = bahan baku + tenaga kerja + overhead per batch and selling price = HPP plus configurable margin.",
+    "Add RBAC guards in React for UX and FastAPI authorization for security.",
+    "Add data-testid attributes, keyboard testing, responsive testing, currency/date localization, and reduced-motion verification.",
+    "Validate monthly report reconciliation: inventory value, COGS, gross profit, balance sheet equation, and cash movement."
+  ],
+  "mocked_integrations": ["If backend endpoints are not yet available, dashboard charts and transaction lists may be MOCKED behind a clearly named mock service; do not present mocked data as live in production."],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": "Create distinctive, emotionally directed interfaces rather than AI-slop templates. Use generous spacing, layered depth, crisp tinted borders, accessible contrast, specific transitions, responsive mobile-first grids, explicit data-testid attributes, and no emoji icons. Keep all files JavaScript (.js/.jsx), not TypeScript (.tsx)."
+}
