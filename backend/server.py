@@ -57,6 +57,7 @@ class ProductionInput(BaseModel):
     material_cost: float
     labor_cost: float
     overhead_cost: float
+    material_lines: List[dict] = []  # [{"purchase_id": str, "qty_used": float}]
 
 class SaleInput(BaseModel):
     channel: str
@@ -71,6 +72,10 @@ class OpExInput(BaseModel):
     category: str
     amount: float
     note: str = ""
+
+class PasswordChangeInput(BaseModel):
+    current_password: str
+    new_password: str
 
 def public_user(user):
     return {"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"]}
@@ -186,18 +191,58 @@ async def create_sale(input: SaleInput, user=Depends(current_user)):
     doc.pop("_id", None)
     return doc
 
+@api_router.post("/auth/change-password")
+async def change_password(input: PasswordChangeInput, user=Depends(current_user)):
+    if len(input.new_password) < 8:
+        raise HTTPException(422, "Password baru minimal 8 karakter")
+    if not bcrypt.checkpw(input.current_password.encode(), user["password_hash"].encode()):
+        raise HTTPException(401, "Password lama tidak sesuai")
+    new_hash = bcrypt.hashpw(input.new_password.encode(), bcrypt.gensalt()).decode()
+    await db.users.update_one({"id": user["id"]}, {"$set": {"password_hash": new_hash}})
+    return {"message": "Password berhasil diperbarui"}
+
+@api_router.get("/purchases")
+async def list_purchases(user=Depends(current_user)):
+    return await db.purchases.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+
 @api_router.post("/purchases")
 async def create_purchase(input: PurchaseInput, user=Depends(current_user)):
     total = input.quantity * input.unit_cost
-    doc = {"id":str(uuid.uuid4()), "po":f"PO-{datetime.now().strftime('%y%m')}-{str(uuid.uuid4())[:4].upper()}", "supplier":input.supplier, "material":input.material, "quantity":input.quantity, "unit":input.unit, "total":total, "status":"Menunggu", "created_at": datetime.now(timezone.utc).isoformat()}
+    doc = {"id":str(uuid.uuid4()), "po":f"PO-{datetime.now().strftime('%y%m')}-{str(uuid.uuid4())[:4].upper()}", "supplier":input.supplier, "material":input.material, "quantity":input.quantity, "remaining_qty": input.quantity, "unit":input.unit, "unit_cost": input.unit_cost, "total":total, "status":"Diterima", "created_at": datetime.now(timezone.utc).isoformat()}
     await db.purchases.insert_one(doc)
     doc.pop("_id", None)
     return doc
 
 @api_router.post("/production")
 async def create_production(input: ProductionInput, user=Depends(current_user)):
-    total = input.material_cost + input.labor_cost + input.overhead_cost
-    doc = {"id":str(uuid.uuid4()), "batch":f"BTH-{datetime.now().strftime('%y%m%d')}-{str(uuid.uuid4())[:3].upper()}", **input.model_dump(), "total_cost":total, "hpp":round(total / input.output_qty, 2), "status":"Draft", "created_at": datetime.now(timezone.utc).isoformat()}
+    if input.output_qty <= 0:
+        raise HTTPException(422, "Output qty harus lebih dari 0")
+    material_cost = input.material_cost
+    material_breakdown = []
+    if input.material_lines:
+        # Validate & compute actual material_cost from linked PO lines
+        computed = 0
+        for line in input.material_lines:
+            pid = line.get("purchase_id")
+            qty_used = float(line.get("qty_used", 0))
+            if not pid or qty_used <= 0:
+                raise HTTPException(422, "Setiap baris bahan harus memiliki purchase_id dan qty_used > 0")
+            po = await db.purchases.find_one({"id": pid}, {"_id": 0})
+            if not po:
+                raise HTTPException(404, f"PO {pid} tidak ditemukan")
+            remaining = po.get("remaining_qty", po.get("quantity", 0))
+            if remaining < qty_used:
+                raise HTTPException(409, f"PO {po.get('po')} hanya sisa {remaining} {po.get('unit')}")
+            unit_cost = po.get("unit_cost", 0)
+            line_cost = qty_used * unit_cost
+            computed += line_cost
+            material_breakdown.append({"purchase_id": pid, "po": po.get("po"), "material": po.get("material"), "qty_used": qty_used, "unit": po.get("unit"), "unit_cost": unit_cost, "line_cost": round(line_cost, 2)})
+        material_cost = round(computed, 2)
+        # Deduct remaining_qty from each PO
+        for line in input.material_lines:
+            await db.purchases.update_one({"id": line["purchase_id"]}, {"$inc": {"remaining_qty": -float(line["qty_used"])}})
+    total = material_cost + input.labor_cost + input.overhead_cost
+    doc = {"id": str(uuid.uuid4()), "batch": f"BTH-{datetime.now().strftime('%y%m%d')}-{str(uuid.uuid4())[:3].upper()}", "sku": input.sku, "product": input.product, "output_qty": input.output_qty, "material_cost": material_cost, "labor_cost": input.labor_cost, "overhead_cost": input.overhead_cost, "material_breakdown": material_breakdown, "total_cost": total, "hpp": round(total / input.output_qty, 2), "status": "Draft", "created_at": datetime.now(timezone.utc).isoformat()}
     await db.production.insert_one(doc)
     doc.pop("_id", None)
     return doc

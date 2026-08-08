@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="13" failures="0" skipped="0" tests="54" time="10.762" timestamp="2026-08-08T17:26:44.757885+00:00" hostname="agent-env-7bed141a-f3de-4d77-9445-a413da7deda5"><testcase classname="tests.backend_test.TestReportsPeriodFilter" name="test_granularity_all_no_previous" time="0.674" /><testcase classname="tests.backend_test.TestReportsPeriodFilter" name="test_granularity_monthly_2026_08" time="0.091" /><testcase classname="tests.test_iter6_features.TestProductionLinkedPO" name="test_production_with_material_lines_computes_cost_and_breakdown" time="0.850" /><testcase classname="tests.backend_test.TestReportsPeriodFilter" name="test_granularity_quarterly_2026_q3" time="0.087" /><testcase classname="tests.test_iter6_features.TestProductionLinkedPO" name="test_production_rejects_qty_exceeds_remaining_409" time="0.091" /><testcase classname="tests.backend_test.TestReportsPeriodFilter" name="test_quarterly_q1_rollback_year" time="0.045" /><testcase classname="tests.backend_test.TestReportsPeriodFilter" name="test_monthly_january_rollback_year" time="0.086" /><testcase classname="tests.test_iter6_features.TestProductionLinkedPO" name="test_production_rejects_missing_po_404" time="0.043" /><testcase classname="tests.backend_test.TestReportsPeriodFilter" name="test_monthly_december_rollforward_year" time="0.047" /><testcase classname="tests.test_iter6_features.TestProductionLinkedPO" name="test_production_rejects_invalid_line_422" time="0.130" /><testcase classname="tests.backend_test.TestReportsPeriodFilter" name="test_invalid_granularity_422" time="0.042" /><testcase classname="tests.backend_test.TestReportsPeriodFilter" name="test_monthly_without_period_422" time="0.084" /><testcase classname="tests.test_iter6_features.TestProductionLinkedPO" name="test_production_without_material_lines_uses_manual_cost" time="0.044" /><testcase classname="tests.backend_test.TestReportsPeriodFilter" name="test_channel_shopee_plus_period_filter" time="0.046" /><testcase classname="tests.test_iter6_features.TestProductionLinkedPO" name="test_production_output_qty_zero_422" time="0.043" /><testcase classname="tests.test_iter6_features.TestProductionLinkedPO" name="test_production_hpp_computation" time="0.043" /><testcase classname="tests.backend_test.TestReportsPeriodFilter" name="test_purchase_and_production_created_at_included_in_period" time="0.371" /><testcase classname="tests.test_iter5_features.TestRoleEnforcement" name="test_staff_reports_forbidden" time="0.370" /><testcase classname="tests.test_iter6_features.TestChangePassword" name="test_no_auth_401" time="0.098" /><testcase classname="tests.test_iter5_features.TestRoleEnforcement" name="test_staff_post_opex_forbidden" time="0.049" /><testcase classname="tests.test_iter5_features.TestRoleEnforcement" name="test_staff_delete_opex_forbidden" time="0.046" /><testcase classname="tests.test_iter5_features.TestRoleEnforcement" name="test_staff_get_opex_allowed" time="0.045" /><testcase classname="tests.test_iter5_features.TestRoleEnforcement" name="test_staff_get_dashboard_inventory_ready" time="0.607" /><testcase classname="tests.test_iter6_features.TestChangePassword" name="test_wrong_current_401" time="0.596" /><testcase classname="tests.test_iter6_features.TestChangePassword" name="test_short_new_password_422" time="0.049" /><testcase classname="tests.test_iter6_features.TestChangePassword" name="test_change_password_flow_and_restore" time="2.901" /><testcase classname="tests.test_iter5_features.TestRoleEnforcement" name="test_staff_can_post_sales_purchases_production" time="0.851" /><testcase classname="tests.test_iter5_features.TestOpExCRUD" name="test_post_opex_bad_period_422" time="0.765" /><testcase classname="tests.test_iter5_features.TestOpExCRUD" name="test_post_opex_negative_amount_422" time="0.058" /><testcase classname="tests.test_iter5_features.TestOpExCRUD" name="test_full_crud_flow" time="1.135" /><testcase classname="tests.test_iter6_features.TestChangePassword" name="test_admin_change_and_restore" time="2.890" /><testcase classname="tests.backend_test.TestAuth" name="test_login_success_sets_cookie" time="0.788"><error message="failed on setup with &quot;AssertionError: Login failed: 401 {&quot;detail&quot;:&quot;Email atau password tidak sesuai&quot;}&#10;assert 401 == 200&#10; +  where 401 = &lt;Response [401]&gt;.status_code&quot;">@pytest.fixture(scope="session")
+    def auth_session():
+        s = requests.Session()
+        r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=20)
+&gt;       assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
+E       AssertionError: Login failed: 401 {"detail":"Email atau password tidak sesuai"}
+E       assert 401 == 200
+E        +  where 401 = &lt;Response [401]&gt;.status_code
+
+backend/tests/backend_test.py:20: AssertionError</error></testcase><testcase classname="tests.backend_test.TestAuth" name="test_protected_without_cookie_401" time="0.253" /><testcase classname="tests.backend_test.TestAuth" name="test_reports_without_cookie_401" time="0.317" /><testcase classname="tests.backend_test.TestSales" name="test_sale_all_valid_channels" time="0.000"><error message="failed on setup with &quot;AssertionError: Login failed: 401 {&quot;detail&quot;:&quot;Email atau password tidak sesuai&quot;}&#10;assert 401 == 200&#10; +  where 401 = &lt;Response [401]&gt;.status_code&quot;">@pytest.fixture(scope="session")
+    def auth_session():
+        s = requests.Session()
+        r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=20)
+&gt;       assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
+E       AssertionError: Login failed: 401 {"detail":"Email atau password tidak sesuai"}
+E       assert 401 == 200
+E        +  where 401 = &lt;Response [401]&gt;.status_code
+
+backend/tests/backend_test.py:20: AssertionError</error></testcase><testcase classname="tests.backend_test.TestSales" name="test_sale_invalid_channel_marketplace_422" time="0.000"><error message="failed on setup with &quot;AssertionError: Login failed: 401 {&quot;detail&quot;:&quot;Email atau password tidak sesuai&quot;}&#10;assert 401 == 200&#10; +  where 401 = &lt;Response [401]&gt;.status_code&quot;">@pytest.fixture(scope="session")
+    def auth_session():
+        s = requests.Session()
+        r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=20)
+&gt;       assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
+E       AssertionError: Login failed: 401 {"detail":"Email atau password tidak sesuai"}
+E       assert 401 == 200
+E        +  where 401 = &lt;Response [401]&gt;.status_code
+
+backend/tests/backend_test.py:20: AssertionError</error></testcase><testcase classname="tests.backend_test.TestSales" name="test_sale_over_available_409" time="0.000"><error message="failed on setup with &quot;AssertionError: Login failed: 401 {&quot;detail&quot;:&quot;Email atau password tidak sesuai&quot;}&#10;assert 401 == 200&#10; +  where 401 = &lt;Response [401]&gt;.status_code&quot;">@pytest.fixture(scope="session")
+    def auth_session():
+        s = requests.Session()
+        r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=20)
+&gt;       assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
+E       AssertionError: Login failed: 401 {"detail":"Email atau password tidak sesuai"}
+E       assert 401 == 200
+E        +  where 401 = &lt;Response [401]&gt;.status_code
+
+backend/tests/backend_test.py:20: AssertionError</error></testcase><testcase classname="tests.backend_test.TestReports" name="test_reports_semua_has_channel_summary" time="0.000"><error message="failed on setup with &quot;AssertionError: Login failed: 401 {&quot;detail&quot;:&quot;Email atau password tidak sesuai&quot;}&#10;assert 401 == 200&#10; +  where 401 = &lt;Response [401]&gt;.status_code&quot;">@pytest.fixture(scope="session")
+    def auth_session():
+        s = requests.Session()
+        r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=20)
+&gt;       assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
+E       AssertionError: Login failed: 401 {"detail":"Email atau password tidak sesuai"}
+E       assert 401 == 200
+E        +  where 401 = &lt;Response [401]&gt;.status_code
+
+backend/tests/backend_test.py:20: AssertionError</error></testcase><testcase classname="tests.backend_test.TestReports" name="test_reports_shopee_filter" time="0.000"><error message="failed on setup with &quot;AssertionError: Login failed: 401 {&quot;detail&quot;:&quot;Email atau password tidak sesuai&quot;}&#10;assert 401 == 200&#10; +  where 401 = &lt;Response [401]&gt;.status_code&quot;">@pytest.fixture(scope="session")
+    def auth_session():
+        s = requests.Session()
+        r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=20)
+&gt;       assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
+E       AssertionError: Login failed: 401 {"detail":"Email atau password tidak sesuai"}
+E       assert 401 == 200
+E        +  where 401 = &lt;Response [401]&gt;.status_code
+
+backend/tests/backend_test.py:20: AssertionError</error></testcase><testcase classname="tests.backend_test.TestReports" name="test_reports_invalid_channel_422" time="0.000"><error message="failed on setup with &quot;AssertionError: Login failed: 401 {&quot;detail&quot;:&quot;Email atau password tidak sesuai&quot;}&#10;assert 401 == 200&#10; +  where 401 = &lt;Response [401]&gt;.status_code&quot;">@pytest.fixture(scope="session")
+    def auth_session():
+        s = requests.Session()
+        r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=20)
+&gt;       assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
+E       AssertionError: Login failed: 401 {"detail":"Email atau password tidak sesuai"}
+E       assert 401 == 200
+E        +  where 401 = &lt;Response [401]&gt;.status_code
+
+backend/tests/backend_test.py:20: AssertionError</error></testcase><testcase classname="tests.test_iter6_features.TestPurchasesStorage" name="test_post_purchase_saves_remaining_and_status" time="0.518"><error message="failed on setup with &quot;AssertionError: login admin@liniar.id failed: 401 {&quot;detail&quot;:&quot;Email atau password tidak sesuai&quot;}&#10;assert 401 == 200&#10; +  where 401 = &lt;Response [401]&gt;.status_code&quot;">@pytest.fixture(scope="module")
+    def admin_session():
+&gt;       s, _ = _login(ADMIN_EMAIL, ADMIN_PASSWORD)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend/tests/test_iter6_features.py:29: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+email = 'admin@liniar.id', password = 'Liniar123!'
+
+    def _login(email, password):
+        s = requests.Session()
+        r = s.post(f"{API}/auth/login", json={"email": email, "password": password}, timeout=20)
+&gt;       assert r.status_code == 200, f"login {email} failed: {r.status_code} {r.text}"
+E       AssertionError: login admin@liniar.id failed: 401 {"detail":"Email atau password tidak sesuai"}
+E       assert 401 == 200
+E        +  where 401 = &lt;Response [401]&gt;.status_code
+
+backend/tests/test_iter6_features.py:23: AssertionError</error></testcase><testcase classname="tests.test_iter6_features.TestPurchasesStorage" name="test_get_purchases_lists_new_fields" time="0.000"><error message="failed on setup with &quot;AssertionError: login admin@liniar.id failed: 401 {&quot;detail&quot;:&quot;Email atau password tidak sesuai&quot;}&#10;assert 401 == 200&#10; +  where 401 = &lt;Response [401]&gt;.status_code&quot;">@pytest.fixture(scope="module")
+    def admin_session():
+&gt;       s, _ = _login(ADMIN_EMAIL, ADMIN_PASSWORD)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+backend/tests/test_iter6_features.py:29: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+email = 'admin@liniar.id', password = 'Liniar123!'
+
+    def _login(email, password):
+        s = requests.Session()
+        r = s.post(f"{API}/auth/login", json={"email": email, "password": password}, timeout=20)
+&gt;       assert r.status_code == 200, f"login {email} failed: {r.status_code} {r.text}"
+E       AssertionError: login admin@liniar.id failed: 401 {"detail":"Email atau password tidak sesuai"}
+E       assert 401 == 200
+E        +  where 401 = &lt;Response [401]&gt;.status_code
+
+backend/tests/test_iter6_features.py:23: AssertionError</error></testcase><testcase classname="tests.test_iter5_features.TestStaffAuth" name="test_staff_login_returns_role_staff" time="0.717" /><testcase classname="tests.test_iter5_features.TestStaffAuth" name="test_staff_me" time="0.740" /><testcase classname="tests.test_iter5_features.TestReportsDynamicOpEx" name="test_monthly_opex_matches_sum" time="0.946" /><testcase classname="tests.test_iter5_features.TestSalesByChannel" name="test_shape_and_ordering" time="0.413" /><testcase classname="tests.test_iter5_features.TestSalesByChannel" name="test_current_month_reflects_sales" time="0.053" /><testcase classname="tests.test_iter5_features.TestReportsDynamicOpEx" name="test_quarterly_opex_sums_three_months" time="0.368" /><testcase classname="tests.backend_test.TestInventory" name="test_inventory_list" time="0.000"><error message="failed on setup with &quot;AssertionError: Login failed: 401 {&quot;detail&quot;:&quot;Email atau password tidak sesuai&quot;}&#10;assert 401 == 200&#10; +  where 401 = &lt;Response [401]&gt;.status_code&quot;">@pytest.fixture(scope="session")
+    def auth_session():
+        s = requests.Session()
+        r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=20)
+&gt;       assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
+E       AssertionError: Login failed: 401 {"detail":"Email atau password tidak sesuai"}
+E       assert 401 == 200
+E        +  where 401 = &lt;Response [401]&gt;.status_code
+
+backend/tests/backend_test.py:20: AssertionError</error></testcase><testcase classname="tests.backend_test.TestInventory" name="test_ready_to_sell_fields" time="0.000"><error message="failed on setup with &quot;AssertionError: Login failed: 401 {&quot;detail&quot;:&quot;Email atau password tidak sesuai&quot;}&#10;assert 401 == 200&#10; +  where 401 = &lt;Response [401]&gt;.status_code&quot;">@pytest.fixture(scope="session")
+    def auth_session():
+        s = requests.Session()
+        r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=20)
+&gt;       assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
+E       AssertionError: Login failed: 401 {"detail":"Email atau password tidak sesuai"}
+E       assert 401 == 200
+E        +  where 401 = &lt;Response [401]&gt;.status_code
+
+backend/tests/backend_test.py:20: AssertionError</error></testcase><testcase classname="tests.backend_test.TestPurchases" name="test_create_purchase_computes_total" time="0.000"><error message="failed on setup with &quot;AssertionError: Login failed: 401 {&quot;detail&quot;:&quot;Email atau password tidak sesuai&quot;}&#10;assert 401 == 200&#10; +  where 401 = &lt;Response [401]&gt;.status_code&quot;">@pytest.fixture(scope="session")
+    def auth_session():
+        s = requests.Session()
+        r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=20)
+&gt;       assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
+E       AssertionError: Login failed: 401 {"detail":"Email atau password tidak sesuai"}
+E       assert 401 == 200
+E        +  where 401 = &lt;Response [401]&gt;.status_code
+
+backend/tests/backend_test.py:20: AssertionError</error></testcase><testcase classname="tests.backend_test.TestProduction" name="test_create_production_computes_hpp" time="0.000"><error message="failed on setup with &quot;AssertionError: Login failed: 401 {&quot;detail&quot;:&quot;Email atau password tidak sesuai&quot;}&#10;assert 401 == 200&#10; +  where 401 = &lt;Response [401]&gt;.status_code&quot;">@pytest.fixture(scope="session")
+    def auth_session():
+        s = requests.Session()
+        r = s.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=20)
+&gt;       assert r.status_code == 200, f"Login failed: {r.status_code} {r.text}"
+E       AssertionError: Login failed: 401 {"detail":"Email atau password tidak sesuai"}
+E       assert 401 == 200
+E        +  where 401 = &lt;Response [401]&gt;.status_code
+
+backend/tests/backend_test.py:20: AssertionError</error></testcase><testcase classname="tests.test_iter5_features.TestReportsDynamicOpEx" name="test_channel_filter_opex_zero" time="0.139" /><testcase classname="tests.test_core_api" name="test_auth_dashboard_reports_and_transactions" time="0.698" /></testsuite></testsuites>
