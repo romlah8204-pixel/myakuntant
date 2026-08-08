@@ -34,7 +34,8 @@ Aplikasi untuk usaha manufaktur fashion: pembelian bahan baku, produksi, persedi
 - **Ubah Password Sendiri**: Halaman Profil dengan form ganti password (bcrypt verify + minimum 8 karakter)
 - **Audit Log Aktivitas**: Setiap login, buat PO, batch produksi, penjualan, beban ops (create/delete), dan ganti password tercatat ke collection `activity_logs` dengan (siapa/kapan/apa/details). Halaman "Audit Log" (admin only) dengan filter action/entity/user + pagination + tombol **Ekspor CSV** yang menghormati filter aktif
 - **Backup Manual ke Emergent Object Storage**: Tombol "Backup sekarang" (admin only) menyimpan snapshot 5 collection bisnis (purchases, production, sales_transactions, inventory, operating_expenses) ke cloud storage sebagai JSON. Halaman "Backup" dengan riwayat + tombol unduh per entri. Users & activity_logs sengaja dikecualikan.
-- Backend testing 58/58 PASS (iter5+iter6+iter7+iter8 kumulatif)
+- **Foto Produk per SKU**: Halaman Persediaan menampilkan thumbnail per SKU + tombol "Ganti foto" (admin only) untuk upload PNG/JPG/WEBP (maks 3 MB) ke Emergent Object Storage. Halaman Siap Dijual juga menampilkan thumbnail. Endpoint `POST/GET/DELETE /api/inventory/{sku}/photo` dengan proxy download auth-protected. Setiap upload/delete tercatat di audit log entity=inventory.
+- Backend testing 28/28 PASS iter10 + kumulatif regression PASS
 
 ## Backlog (P2)
 - Atomic decrement material_lines dengan concurrency guard
