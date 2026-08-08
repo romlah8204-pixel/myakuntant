@@ -21,10 +21,12 @@ Dashboard KPI dan grafik; pembelian bahan; produksi batch dan HPP; persediaan; l
 - Dashboard dengan KPI, grafik pendapatan, alert stok, antrean batch.
 - Form PO bahan baku dan form batch produksi dengan preview HPP setelah tersimpan.
 - Daftar persediaan dari API dan laporan interaktif tiga tab.
+- Modul penjualan multi-channel dengan invoice, validasi stok, pengurangan stok atomik, dan histori transaksi.
 - Responsive layout Atelier Ledger dengan test IDs dan status/error dasar.
 
 ## Prioritized backlog
-- P0: tambah modul penjualan dan barang siap dijual yang mengurangi stok.
+- P0: tambah modul barang siap dijual yang mengurangi stok.
+- P0: alur penjualan Offline, Bazar, dan Marketplace dengan COGS serta laba kotor.
 - P1: form master produk/SKU, supplier, harga jual, dan konfigurasi margin.
 - P1: jurnal transaksi otomatis serta rekonsiliasi laporan dengan periode yang dapat dipilih.
 - P2: ekspor PDF/Excel, audit trail, dan manajemen user staf.

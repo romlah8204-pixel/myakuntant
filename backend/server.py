@@ -157,7 +157,9 @@ async def create_sale(input: SaleInput, user=Depends(current_user)):
     revenue = input.quantity * input.unit_price
     cogs = input.quantity * unit_cost
     doc = {"id": str(uuid.uuid4()), "invoice": f"INV-{datetime.now().strftime('%y%m%d')}-{str(uuid.uuid4())[:4].upper()}", **input.model_dump(), "revenue": revenue, "cogs": round(cogs, 2), "gross_profit": round(revenue - cogs, 2), "created_at": datetime.now(timezone.utc).isoformat(), "status": "Lunas"}
-    await db.inventory.update_one({"sku": input.sku}, {"$inc": {"stock": -input.quantity, "available": -input.quantity}})
+    updated = await db.inventory.update_one({"sku": input.sku, "available": {"$gte": input.quantity}}, {"$inc": {"stock": -input.quantity, "available": -input.quantity}})
+    if updated.modified_count != 1:
+        raise HTTPException(409, "Stok berubah. Muat ulang persediaan lalu coba lagi")
     await db.sales_transactions.insert_one(doc)
     doc.pop("_id", None)
     return doc
