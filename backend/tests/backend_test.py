@@ -166,3 +166,133 @@ class TestReports:
     def test_reports_invalid_channel_422(self, auth_session):
         r = auth_session.get(f"{API}/reports", params={"channel": "Marketplace"}, timeout=15)
         assert r.status_code == 422
+
+
+# -------- Reports: period filter + previous period comparison --------
+class TestReportsPeriodFilter:
+    def test_granularity_all_no_previous(self, auth_session):
+        r = auth_session.get(f"{API}/reports", params={"granularity": "all"}, timeout=15)
+        assert r.status_code == 200
+        d = r.json()
+        assert d["period"] == "Semua Periode"
+        assert d["previous_period"] is None
+        assert d["previous"] is None
+        assert d["deltas"] is None
+        assert d["granularity"] == "all"
+
+    def test_granularity_monthly_2026_08(self, auth_session):
+        r = auth_session.get(f"{API}/reports", params={"granularity": "monthly", "period": "2026-08"}, timeout=15)
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["period"] == "Agu 2026"
+        assert d["previous_period"] == "Jul 2026"
+        assert d["previous"] is not None
+        prev_keys = {"revenue", "cogs", "gross_profit", "operating_expense", "net_profit",
+                     "cash_in", "cash_out", "cash_net", "transaction_count"}
+        assert prev_keys.issubset(set(d["previous"].keys())), f"missing keys: {prev_keys - set(d['previous'].keys())}"
+        assert d["deltas"] is not None
+        assert set(d["deltas"].keys()) == {"revenue_pct", "net_profit_pct", "cash_net_pct"}
+
+    def test_granularity_quarterly_2026_q3(self, auth_session):
+        r = auth_session.get(f"{API}/reports", params={"granularity": "quarterly", "period": "2026-Q3"}, timeout=15)
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["period"] == "Q3 2026"
+        assert d["previous_period"] == "Q2 2026"
+        assert d["previous"] is not None
+        assert d["deltas"] is not None
+        assert set(d["deltas"].keys()) == {"revenue_pct", "net_profit_pct", "cash_net_pct"}
+
+    def test_quarterly_q1_rollback_year(self, auth_session):
+        r = auth_session.get(f"{API}/reports", params={"granularity": "quarterly", "period": "2026-Q1"}, timeout=15)
+        assert r.status_code == 200
+        d = r.json()
+        assert d["period"] == "Q1 2026"
+        assert d["previous_period"] == "Q4 2025"
+
+    def test_monthly_january_rollback_year(self, auth_session):
+        r = auth_session.get(f"{API}/reports", params={"granularity": "monthly", "period": "2026-01"}, timeout=15)
+        assert r.status_code == 200
+        d = r.json()
+        assert d["period"] == "Jan 2026"
+        assert d["previous_period"] == "Des 2025"
+
+    def test_monthly_december_rollforward_year(self, auth_session):
+        # December should not raise, end range should roll into next year Jan 1
+        r = auth_session.get(f"{API}/reports", params={"granularity": "monthly", "period": "2026-12"}, timeout=15)
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["period"] == "Des 2026"
+        assert d["previous_period"] == "Nov 2026"
+
+    def test_invalid_granularity_422(self, auth_session):
+        r = auth_session.get(f"{API}/reports", params={"granularity": "weekly"}, timeout=15)
+        assert r.status_code == 422
+        assert "Granularity tidak valid" in r.text
+
+    def test_monthly_without_period_422(self, auth_session):
+        r = auth_session.get(f"{API}/reports", params={"granularity": "monthly"}, timeout=15)
+        assert r.status_code == 422
+        assert "Period wajib diisi" in r.text
+
+    def test_channel_shopee_plus_period_filter(self, auth_session):
+        # Verify report filtered by channel=Shopee + monthly period returns correct label,
+        # channel echo, empty channel_summary, and operating_expense==0.
+        # (TestSales creates Shopee sales in current month, so transaction_count>=1.)
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        period_str = f"{now.year:04d}-{now.month:02d}"
+        id_month = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
+        expected_label = f"{id_month[now.month-1]} {now.year}"
+
+        r = auth_session.get(f"{API}/reports",
+                             params={"channel": "Shopee", "granularity": "monthly", "period": period_str},
+                             timeout=15)
+        assert r.status_code == 200, r.text
+        d = r.json()
+        assert d["period"] == expected_label
+        assert d["channel"] == "Shopee"
+        assert d["granularity"] == "monthly"
+        # operating_expense=0 when channel != Semua
+        assert d["income"]["operating_expense"] == 0
+        # Channel summary empty when not Semua
+        assert d["channel_summary"] == {}
+        # Should include previous-period comparison payload
+        assert d["previous"] is not None
+        assert d["deltas"] is not None
+
+    def test_purchase_and_production_created_at_included_in_period(self, auth_session):
+        # A purchase created now should be counted in cash_out of current-month report (channel=Semua).
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        period_str = f"{now.year:04d}-{now.month:02d}"
+
+        r_before = auth_session.get(f"{API}/reports",
+                                    params={"channel": "Semua", "granularity": "monthly", "period": period_str},
+                                    timeout=15)
+        assert r_before.status_code == 200
+        base_out = r_before.json()["cash"]["out"]
+
+        purchase = {"supplier": "TEST_Supp_Period", "material": "TEST", "quantity": 2, "unit": "meter", "unit_cost": 111111}
+        rp = auth_session.post(f"{API}/purchases", json=purchase, timeout=15)
+        assert rp.status_code == 200
+        purchase_total = rp.json()["total"]
+        assert purchase_total == 222222
+
+        production = {"sku": "TEST-PROD-PERIOD", "product": "TEST", "output_qty": 5,
+                      "material_cost": 100000, "labor_cost": 50000, "overhead_cost": 25000}
+        rpr = auth_session.post(f"{API}/production", json=production, timeout=15)
+        assert rpr.status_code == 200
+        production_total = rpr.json()["total_cost"]
+        assert production_total == 175000
+
+        r_after = auth_session.get(f"{API}/reports",
+                                   params={"channel": "Semua", "granularity": "monthly", "period": period_str},
+                                   timeout=15)
+        assert r_after.status_code == 200
+        after_out = r_after.json()["cash"]["out"]
+        # Use >= to be robust against parallel tests (pytest-xdist) also creating purchases/production.
+        assert after_out >= base_out + purchase_total + production_total, (
+            f"cash.out did not include newly-created purchase+production (created_at not filtered in): "
+            f"before={base_out} after={after_out} min_expected_delta={purchase_total + production_total}"
+        )

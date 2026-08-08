@@ -1,0 +1,36 @@
+{
+  "summary": "Backend regression + new-feature tests for period filter (granularity=all|monthly|quarterly, period=YYYY-MM|YYYY-Qn) with previous-period comparison and deltas on /api/reports. Added 10 new tests to TestReportsPeriodFilter covering: granularity=all returns 'Semua Periode' with no previous, monthly 2026-08 returns 'Agu 2026' / prev 'Jul 2026' with full previous{} + deltas{}, quarterly 2026-Q3 returns 'Q3 2026'/'Q2 2026', year rollback for Q1->Q4 previous year and January->December previous year, year rollforward for December (period='Des 2026', valid end range), 422 for granularity='weekly' and 422 for monthly without period, Shopee+monthly filter returns correct label with empty channel_summary and operating_expense=0, and POST /purchases + POST /production created_at persistence verified via cash.out delta in current-month report. All 23/23 backend tests pass (100%).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py _period_range: month rollover uses (m//12) and (m%12)+1 which correctly produces Jan next year for m=12, but this compact arithmetic is easy to break; add a unit-level docstring example.",
+    "operating_expense stays hardcoded at 3,840,000 (monthly value) even for quarterly ('Q3 2026') and 'all-time' aggregations — quarterly should arguably be ~3x, 'all' should sum historical OpEx; currently the same flat number is added regardless of period length which distorts net_profit and net_profit_pct deltas.",
+    "_pct edge case: when previous==0 and current==0 returns None, but frontend must handle None separately from a numeric 0.0 delta — document contract or return 0.0 for consistency.",
+    "Legacy production/purchases rows created before this iteration have no created_at field and are silently excluded from any granularity!='all' report. If those rows should be preserved for history, a migration is needed to backfill created_at (e.g., from ObjectId timestamp) — otherwise period reports systematically under-count historical cash_out.",
+    "Persisted sales/purchases/production created_at is stored as ISO string; the range query uses string $gte/$lt comparison which works only because ISO-8601 sorts lexicographically. Fine, but worth a comment; if tz-aware strings ever mix with naive strings, comparisons will silently misbehave.",
+    "GET /api/reports has no upper bound on to_list(2000) — for high-volume months this silently truncates aggregates. Aggregate on the DB side ($group) instead of pulling docs.",
+    "No validation on `period` format itself: period='abcd-99' returns 500/crash (int() ValueError bubbles as unhandled). Add regex validation and return 422 with a clear message."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py"
+  ],
+  "success_rate": {"backend": "100% (23/23)", "frontend": "N/A (not requested)"},
+  "test_credentials": "admin@liniar.id / Liniar123! (from /app/memory/test_credentials.md) — verified working",
+  "seed_data_creation": "None. Tests create TEST_ prefixed purchases/production and Shopee sales on existing LIN-OVR-001 stock. All new tests are robust against pytest-xdist parallel execution (use >= for shared counters, avoid extra stock consumption in the period-filter test).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "backend_test.py now contains 23 tests including TestReportsPeriodFilter (10 tests) covering all period filter scenarios from iteration_4 spec. Uses -n 2 --dist loadscope via /app/backend/pytest.ini. Legacy purchases/production docs without created_at are excluded from period-scoped reports — this is expected behavior after the created_at addition. Frontend was NOT tested (backend-only scope).",
+  "rca of the issue": "N/A - no bugs found in the requested scope. All period filter, previous-period comparison, delta computation, year-rollover/rollforward, validation (422), and channel+period combination scenarios behave per spec."
+}

@@ -174,7 +174,7 @@ async def create_sale(input: SaleInput, user=Depends(current_user)):
 @api_router.post("/purchases")
 async def create_purchase(input: PurchaseInput, user=Depends(current_user)):
     total = input.quantity * input.unit_cost
-    doc = {"id":str(uuid.uuid4()), "po":f"PO-{datetime.now().strftime('%y%m')}-{str(uuid.uuid4())[:4].upper()}", "supplier":input.supplier, "material":input.material, "quantity":input.quantity, "unit":input.unit, "total":total, "status":"Menunggu"}
+    doc = {"id":str(uuid.uuid4()), "po":f"PO-{datetime.now().strftime('%y%m')}-{str(uuid.uuid4())[:4].upper()}", "supplier":input.supplier, "material":input.material, "quantity":input.quantity, "unit":input.unit, "total":total, "status":"Menunggu", "created_at": datetime.now(timezone.utc).isoformat()}
     await db.purchases.insert_one(doc)
     doc.pop("_id", None)
     return doc
@@ -182,37 +182,92 @@ async def create_purchase(input: PurchaseInput, user=Depends(current_user)):
 @api_router.post("/production")
 async def create_production(input: ProductionInput, user=Depends(current_user)):
     total = input.material_cost + input.labor_cost + input.overhead_cost
-    doc = {"id":str(uuid.uuid4()), "batch":f"BTH-{datetime.now().strftime('%y%m%d')}-{str(uuid.uuid4())[:3].upper()}", **input.model_dump(), "total_cost":total, "hpp":round(total / input.output_qty, 2), "status":"Draft"}
+    doc = {"id":str(uuid.uuid4()), "batch":f"BTH-{datetime.now().strftime('%y%m%d')}-{str(uuid.uuid4())[:3].upper()}", **input.model_dump(), "total_cost":total, "hpp":round(total / input.output_qty, 2), "status":"Draft", "created_at": datetime.now(timezone.utc).isoformat()}
     await db.production.insert_one(doc)
     doc.pop("_id", None)
     return doc
 
-@api_router.get("/reports")
-async def reports(channel: str = Query("Semua"), user=Depends(current_user)):
-    valid_channels = {"Semua", "Offline", "Bazar", "Shopee", "Tokopedia", "TikTok"}
-    if channel not in valid_channels:
-        raise HTTPException(422, "Kanal laporan tidak valid")
-    query = {} if channel == "Semua" else {"channel": channel}
-    transactions = await db.sales_transactions.find(query, {"_id": 0}).to_list(1000)
-    revenue = sum(item.get("revenue", 0) for item in transactions)
-    cogs = sum(item.get("cogs", 0) for item in transactions)
-    purchases = await db.purchases.find({}, {"_id": 0}).to_list(1000)
-    production = await db.production.find({}, {"_id": 0}).to_list(1000)
-    cash_out = sum(item.get("total", 0) for item in purchases) + sum(item.get("total_cost", 0) for item in production)
-    inventory = await db.inventory.find({}, {"_id": 0}).to_list(1000)
-    inventory_value = sum(item.get("value", 0) for item in inventory)
-    operating_expense = 3840000 if channel == "Semua" else 0
+def _period_range(granularity: str, period: str):
+    """Return (start_iso, end_iso, label, prev_start_iso, prev_end_iso, prev_label) for a granularity+period.
+    granularity: 'monthly' | 'quarterly' | 'all'. period: 'YYYY-MM' or 'YYYY-Qn' (n=1..4)."""
+    id_month = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
+    if granularity == "all":
+        return None, None, "Semua Periode", None, None, "—"
+    if granularity == "monthly":
+        y, m = int(period[:4]), int(period[5:7])
+        start = datetime(y, m, 1, tzinfo=timezone.utc)
+        end = datetime(y + (m // 12), (m % 12) + 1, 1, tzinfo=timezone.utc)
+        pm, py = (m - 1, y) if m > 1 else (12, y - 1)
+        p_start = datetime(py, pm, 1, tzinfo=timezone.utc)
+        p_end = datetime(py + (pm // 12), (pm % 12) + 1, 1, tzinfo=timezone.utc)
+        return start.isoformat(), end.isoformat(), f"{id_month[m-1]} {y}", p_start.isoformat(), p_end.isoformat(), f"{id_month[pm-1]} {py}"
+    if granularity == "quarterly":
+        y, q = int(period[:4]), int(period[6])
+        sm = (q - 1) * 3 + 1
+        em = sm + 3
+        start = datetime(y, sm, 1, tzinfo=timezone.utc)
+        end = datetime(y + (em - 1) // 12, ((em - 1) % 12) + 1, 1, tzinfo=timezone.utc)
+        pq, py = (q - 1, y) if q > 1 else (4, y - 1)
+        psm = (pq - 1) * 3 + 1
+        pem = psm + 3
+        p_start = datetime(py, psm, 1, tzinfo=timezone.utc)
+        p_end = datetime(py + (pem - 1) // 12, ((pem - 1) % 12) + 1, 1, tzinfo=timezone.utc)
+        return start.isoformat(), end.isoformat(), f"Q{q} {y}", p_start.isoformat(), p_end.isoformat(), f"Q{pq} {py}"
+    raise HTTPException(422, "Granularity tidak valid")
+
+def _aggregate(sales_rows, purchase_rows, production_rows, channel_filter_all: bool):
+    revenue = sum(item.get("revenue", 0) for item in sales_rows)
+    cogs = sum(item.get("cogs", 0) for item in sales_rows)
+    cash_out = sum(item.get("total", 0) for item in purchase_rows) + sum(item.get("total_cost", 0) for item in production_rows)
+    operating_expense = 3840000 if channel_filter_all else 0
     gross_profit = revenue - cogs
     net_profit = gross_profit - operating_expense
     cash_net = revenue - cash_out
-    assets = inventory_value + max(cash_net, 0)
+    return {"revenue": revenue, "cogs": cogs, "gross_profit": gross_profit, "operating_expense": operating_expense, "net_profit": net_profit, "cash_in": revenue, "cash_out": cash_out, "cash_net": cash_net, "transaction_count": len(sales_rows)}
+
+def _pct(current, previous):
+    if previous == 0:
+        return None if current == 0 else 100.0 if current > 0 else -100.0
+    return round((current - previous) / abs(previous) * 100, 1)
+
+@api_router.get("/reports")
+async def reports(channel: str = Query("Semua"), granularity: str = Query("all"), period: str = Query(""), user=Depends(current_user)):
+    valid_channels = {"Semua", "Offline", "Bazar", "Shopee", "Tokopedia", "TikTok"}
+    if channel not in valid_channels:
+        raise HTTPException(422, "Kanal laporan tidak valid")
+    if granularity not in {"all", "monthly", "quarterly"}:
+        raise HTTPException(422, "Granularity tidak valid")
+    if granularity != "all" and not period:
+        raise HTTPException(422, "Period wajib diisi untuk granularity monthly/quarterly")
+    start, end, label, p_start, p_end, p_label = _period_range(granularity, period)
+    channel_q = {} if channel == "Semua" else {"channel": channel}
+    def range_q(s, e):
+        if not s:
+            return {}
+        return {"created_at": {"$gte": s, "$lt": e}}
+    sales = await db.sales_transactions.find({**channel_q, **range_q(start, end)}, {"_id": 0}).to_list(2000)
+    purchases = await db.purchases.find(range_q(start, end), {"_id": 0}).to_list(2000)
+    production = await db.production.find(range_q(start, end), {"_id": 0}).to_list(2000)
+    current = _aggregate(sales, purchases, production, channel == "Semua")
+    previous = None
+    if p_start:
+        p_sales = await db.sales_transactions.find({**channel_q, **range_q(p_start, p_end)}, {"_id": 0}).to_list(2000)
+        p_purchases = await db.purchases.find(range_q(p_start, p_end), {"_id": 0}).to_list(2000)
+        p_production = await db.production.find(range_q(p_start, p_end), {"_id": 0}).to_list(2000)
+        previous = _aggregate(p_sales, p_purchases, p_production, channel == "Semua")
+    inventory = await db.inventory.find({}, {"_id": 0}).to_list(1000)
+    inventory_value = sum(item.get("value", 0) for item in inventory)
+    assets = inventory_value + max(current["cash_net"], 0)
     liabilities = 21800000
     channel_summary = {}
     if channel == "Semua":
         for name in ["Offline", "Bazar", "Shopee", "Tokopedia", "TikTok"]:
-            rows = [t for t in transactions if t.get("channel") == name]
+            rows = [t for t in sales if t.get("channel") == name]
             channel_summary[name] = {"revenue": sum(r.get("revenue", 0) for r in rows), "count": len(rows)}
-    return {"period": "Juni 2024", "channel": channel, "transaction_count": len(transactions), "income": {"revenue": revenue, "cogs": cogs, "gross_profit": gross_profit, "operating_expense": operating_expense, "net_profit": net_profit}, "balance": {"assets": assets, "liabilities": liabilities, "equity": assets - liabilities}, "cash": {"in": revenue, "out": cash_out, "net": cash_net}, "channel_summary": channel_summary}
+    deltas = None
+    if previous:
+        deltas = {"revenue_pct": _pct(current["revenue"], previous["revenue"]), "net_profit_pct": _pct(current["net_profit"], previous["net_profit"]), "cash_net_pct": _pct(current["cash_net"], previous["cash_net"])}
+    return {"period": label, "previous_period": p_label if previous else None, "granularity": granularity, "channel": channel, "transaction_count": current["transaction_count"], "income": {"revenue": current["revenue"], "cogs": current["cogs"], "gross_profit": current["gross_profit"], "operating_expense": current["operating_expense"], "net_profit": current["net_profit"]}, "balance": {"assets": assets, "liabilities": liabilities, "equity": assets - liabilities}, "cash": {"in": current["cash_in"], "out": current["cash_out"], "net": current["cash_net"]}, "previous": previous, "deltas": deltas, "channel_summary": channel_summary}
 
 # Add your routes to the router instead of directly to app
 @api_router.get("/")
