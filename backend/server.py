@@ -581,6 +581,46 @@ async def get_status_checks():
     
     return status_checks
 
+# ---------- Public catalog (no auth) ----------
+
+async def _compute_retail_price(sku: str, cost_value: float) -> float:
+    """Latest sale unit_price for the SKU, else fallback to 1.4x cost per unit."""
+    latest = await db.sales_transactions.find_one({"sku": sku}, {"_id": 0, "unit_price": 1}, sort=[("created_at", -1)])
+    if latest and latest.get("unit_price"):
+        return float(latest["unit_price"])
+    return round(cost_value * 1.4, -2) if cost_value else 0
+
+@api_router.get("/public/catalog")
+async def public_catalog():
+    items = await db.inventory.find({"type": "Barang Jadi", "available": {"$gt": 0}}, {"_id": 0}).to_list(200)
+    result = []
+    for item in items:
+        per_unit_cost = (item.get("value", 0) / item.get("stock", 1)) if item.get("stock") else 0
+        price = await _compute_retail_price(item["sku"], per_unit_cost)
+        result.append({
+            "sku": item["sku"],
+            "name": item.get("name"),
+            "variant": item.get("variant"),
+            "available": item.get("available", 0),
+            "unit": item.get("unit", "pcs"),
+            "price": price,
+            "has_photo": bool(item.get("photo_path")),
+        })
+    return {"brand": "Liniar", "items": result, "count": len(result)}
+
+@api_router.get("/public/catalog/{sku}/photo")
+async def public_catalog_photo(sku: str):
+    item = await db.inventory.find_one({"sku": sku, "type": "Barang Jadi"}, {"_id": 0})
+    if not item or not item.get("photo_path"):
+        raise HTTPException(404, "Foto tidak tersedia")
+    try:
+        data, content_type = await asyncio.to_thread(get_object, item["photo_path"])
+    except Exception as e:
+        raise HTTPException(502, f"Gagal ambil foto: {e}")
+    return Response(content=data, media_type=item.get("photo_content_type") or content_type, headers={"Cache-Control": "public, max-age=600"})
+
+
+
 # Include the router in the main app
 app.include_router(api_router)
 

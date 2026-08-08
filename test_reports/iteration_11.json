@@ -1,0 +1,30 @@
+{
+  "summary": "Iterasi 11 public catalog endpoints tested. 13/13 iter11 tests PASS (1 skipped karena semua barang jadi punya foto). Endpoint publik berfungsi tanpa auth, struktur response benar (brand/count/items), tidak leak field internal (value/stock/photo_path/status), Bahan Baku (FAB-COT-042) tidak muncul & fotonya tidak bisa diakses via endpoint publik, SKU non-existent -> 404, dan endpoint auth-protected (inventory/sales/admin photo) tetap ter-proteksi. Regression suite: 121 tests lain PASS; 1 iter10 test intermittent 502 (bukan iter11 scope), 2 error di test_sales_flow.py karena env var (pre-existing).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/public/catalog/{sku}/photo", "issue": "Backend correctly sets Cache-Control: 'public, max-age=600' (verified via localhost), namun Cloudflare ingress meng-override header menjadi 'no-store, no-cache, must-revalidate'. Ini infrastruktur-level, bukan bug backend. Cache di client/CDN mungkin tidak akan bekerja sesuai design lewat public URL."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter11_public_catalog.py",
+    "/app/test_reports/pytest/iter11.xml"
+  ],
+  "action_items": [
+    "Optional: coba set header via Starlette Response custom / atau tambah middleware yang menghapus header 'no-store' saat path diawali /api/public/. Namun karena override berasal dari Cloudflare, kemungkinan perlu whitelist di ingress config bukan di aplikasi.",
+    "Pre-existing (bukan iter11): /app/backend/tests/test_sales_flow.py memakai os.environ['REACT_APP_BACKEND_URL'] tanpa default, gagal saat pytest collect."
+  ],
+  "critical_code_review_comments": [
+    "server.py sudah 644 lines - mendekati batas 700 lines, pertimbangkan split module (routers/public.py, routers/inventory.py, dll).",
+    "_compute_retail_price rounding: round(cost*1.4, -2) - hasil bisa 0 untuk cost < 50. Tidak ada guard untuk price minimum.",
+    "public_catalog tidak mem-filter status (mis. 'discontinued/hidden') - jika field status ditambahkan nanti perlu filter di sini.",
+    "Response photo endpoint publik bisa dieksploitasi untuk enumerasi SKU (200 vs 404). Low risk karena SKU tidak sensitif."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter11_public_catalog.py"],
+  "success_rate": {"backend": "100% (13/13 iter11)", "frontend": "N/A"},
+  "seed_data_creation": "None - reused existing seed (LIN-OVR-001, LIN-PNT-008 Barang Jadi with photos; FAB-COT-042 Bahan Baku).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter11 adds 2 unauthenticated endpoints: GET /api/public/catalog dan GET /api/public/catalog/{sku}/photo. Semua fungsional check pass. Perhatikan Cloudflare override Cache-Control - kalau di iterasi berikutnya main agent mencoba fix header, test lokal (localhost:8001) menunjukkan backend sudah benar."
+}
