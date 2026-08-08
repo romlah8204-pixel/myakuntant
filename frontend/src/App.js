@@ -1,56 +1,27 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, NavLink, useNavigate } from "react-router-dom";
 import axios from "axios";
-import { HOME } from "@/constants/testIds";
+import { LayoutDashboard, ShoppingBag, Scissors, Boxes, BarChart3, LogOut, Plus, AlertTriangle, ArrowUpRight } from "lucide-react";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
+const money = n => new Intl.NumberFormat("id-ID", {style:"currency", currency:"IDR", maximumFractionDigits:0}).format(n);
+const api = axios.create({baseURL:API, withCredentials:true});
+const nav = [{to:"/",label:"Ringkasan",icon:LayoutDashboard},{to:"/pembelian",label:"Pembelian",icon:ShoppingBag},{to:"/produksi",label:"Produksi",icon:Scissors},{to:"/persediaan",label:"Persediaan",icon:Boxes},{to:"/laporan",label:"Laporan",icon:BarChart3}];
 
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
+function Login({onLogin}) { const [email,setEmail]=useState("admin@liniar.id"),[password,setPassword]=useState("Liniar123!"),[error,setError]=useState(""); const submit=async e=>{e.preventDefault();try{const r=await api.post("/auth/login",{email,password});onLogin(r.data)}catch(err){setError(err.response?.data?.detail||"Login gagal")}}; return <main className="login-page"><div className="login-mark">L<span>.</span></div><p className="eyebrow">ATELIER LEDGER / MANUFACTURING OS</p><h1>Kerja yang rapi,<br/><em>terlihat hasilnya.</em></h1><form onSubmit={submit} className="login-form"><label>Email<input data-testid="login-email-input" value={email} onChange={e=>setEmail(e.target.value)} type="email"/></label><label>Password<input data-testid="login-password-input" value={password} onChange={e=>setPassword(e.target.value)} type="password"/></label>{error&&<div data-testid="login-error" className="error">{error}</div>}<button data-testid="login-submit-button" className="primary-btn">Masuk ke workspace <ArrowUpRight size={17}/></button></form><small>Gunakan akun demo untuk mencoba workspace.</small></main> }
 
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          data-testid={HOME.emergentLink}
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
+function Shell({user,onLogout,children}) { const navigate=useNavigate(); return <div className="shell"><aside><div className="brand">L<span>.</span><small>LINIAR</small></div><div className="workspace-label">WORKSPACE UTAMA</div><nav>{nav.map(({to,label,icon:Icon})=><NavLink data-testid={`nav-${label.toLowerCase()}`} key={to} to={to} end={to==="/"}><Icon size={17}/>{label}</NavLink>)}</nav><div className="sidebar-bottom"><div className="role-chip"><span className="avatar">{user.name.slice(0,1)}</span><div><b>{user.name}</b><small>{user.role === "admin" ? "Administrator" : "Staf"}</small></div></div><button data-testid="logout-button" className="logout" onClick={async()=>{await api.post("/auth/logout");onLogout();navigate("/login")}}><LogOut size={16}/> Keluar</button></div></aside><div className="content"><header><div><span className="eyebrow">SELASA, 18 JUNI 2024</span><h2>Selamat pagi, {user.name.split(" ")[0]}.</h2></div><button data-testid="header-add-button" className="primary-btn compact"><Plus size={17}/> Transaksi baru</button></header>{children}</div></div> }
+
+function Dashboard(){const [data,setData]=useState(null);useEffect(()=>{api.get("/dashboard").then(r=>setData(r.data))},[]);if(!data)return <div className="loading">Memuat ringkasan...</div>;return <main className="dashboard"><div className="intro"><div><p className="eyebrow">RINGKASAN OPERASIONAL / JUNI 2024</p><h1>Angka yang <em>bercerita.</em></h1></div><span className="live-dot">● DATA TERKINI</span></div><section className="metric-grid">{[["Penjualan bulan ini",money(data.metrics.revenue),data.metrics.revenue_change,"up"],["Nilai persediaan",money(data.metrics.inventory_value),"+6,2%","up"],["Unit diproduksi",data.metrics.production_units+" pcs","+12 batch","up"],["Margin kotor",data.metrics.gross_margin,"vs 29,4% bulan lalu","up"]].map((m,i)=><div data-testid={`metric-${i}`} className="metric" key={m[0]}><span>{m[0]}</span><strong>{m[1]}</strong><small className={m[3]}>{m[2]} <ArrowUpRight size={13}/></small></div>)}</section><div className="dashboard-grid"><section className="panel sales-panel"><div className="panel-head"><div><span className="eyebrow">PERFORMA PENJUALAN</span><h3>Tren pendapatan</h3></div><span className="period">6 bulan terakhir⌄</span></div><div className="chart"><div className="chart-y"><span>40 jt</span><span>30 jt</span><span>20 jt</span><span>10 jt</span><span>0</span></div><div className="bars">{data.sales.map((s)=><div className="bar-wrap" key={s.month}><div data-testid={`sales-bar-${s.month}`} className="bar" style={{height:`${s.value/40000000*100}%`}} title={money(s.value)}></div><small>{s.month}</small></div>)}</div></div></section><section className="panel alerts"><div className="panel-head"><div><span className="eyebrow">PERHATIAN</span><h3>Stok menipis</h3></div><AlertTriangle size={18}/></div>{data.inventory.filter(x=>x.status!=="Sehat").map(x=><div data-testid={`low-stock-${x.sku}`} className="stock-alert" key={x.sku}><div><b>{x.name}</b><small>{x.variant} · {x.stock} {x.unit} tersisa</small></div><span>Restock</span></div>)}<NavLink data-testid="view-inventory-link" className="text-link" to="/persediaan">Lihat semua persediaan →</NavLink></section><section className="panel queue"><div className="panel-head"><div><span className="eyebrow">LANTAI PRODUKSI</span><h3>Antrean batch</h3></div><NavLink data-testid="view-production-link" className="text-link" to="/produksi">Buka produksi →</NavLink></div>{data.queue.map(x=><div className="queue-row" key={x.batch}><span className="batch">{x.batch}</span><div><b>{x.product}</b><small>{x.qty} unit</small></div><span className={`status ${x.status.toLowerCase()}`}>{x.status}</span></div>)}</section></div></main>}
+
+function SimplePage({title,eyebrow,children}){return <main className="simple-page"><p className="eyebrow">{eyebrow}</p><h1>{title}</h1>{children||<div className="empty-panel"><p>Modul siap digunakan untuk mencatat dan memantau aktivitas Anda.</p><button data-testid="simple-add-button" className="primary-btn"><Plus size={16}/> Tambah transaksi</button></div>}</main>}
+function Reports(){return <SimplePage title="Laporan keuangan" eyebrow="LAPORAN / JUNI 2024"><div className="report-tabs"><button data-testid="report-balance-tab">Neraca</button><button data-testid="report-income-tab" className="active">Laba Rugi</button><button data-testid="report-cash-tab">Arus Kas</button></div><div className="report-grid"><div className="report-card"><span>Pendapatan</span><strong>{money(34200000)}</strong></div><div className="report-card"><span>Laba kotor</span><strong>{money(11230000)}</strong></div><div className="report-card"><span>Laba bersih</span><strong>{money(7390000)}</strong></div></div></SimplePage>}
 
 function App() {
-  return (
-    <div className="App">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </div>
-  );
+ const [user,setUser]=useState(null),[checking,setChecking]=useState(true);useEffect(()=>{api.get("/auth/me").then(r=>setUser(r.data)).catch(()=>{}).finally(()=>setChecking(false))},[]);if(checking)return <div className="loading">Menyiapkan workspace...</div>;return <BrowserRouter>{user?<Shell user={user} onLogout={()=>setUser(null)}><Routes><Route path="/" element={<Dashboard/>}/><Route path="/pembelian" element={<SimplePage title="Pembelian bahan baku" eyebrow="TRANSAKSI / PEMBELIAN"/>}/><Route path="/produksi" element={<SimplePage title="Produksi & HPP" eyebrow="OPERASIONAL / PRODUKSI"/>}/><Route path="/persediaan" element={<SimplePage title="Persediaan" eyebrow="GUDANG / PERSEDIAAN"/>}/><Route path="/laporan" element={<Reports/>}/><Route path="*" element={<Navigate to="/"/>}/></Routes></Shell>:<Routes><Route path="/login" element={<Login onLogin={setUser}/>}/><Route path="*" element={<Navigate to="/login"/>}/></Routes>}</BrowserRouter>
 }
 
 export default App;
