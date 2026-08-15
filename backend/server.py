@@ -80,6 +80,22 @@ class PasswordChangeInput(BaseModel):
     current_password: str
     new_password: str
 
+class CashMovementInput(BaseModel):
+    date: str  # YYYY-MM-DD
+    account: str  # kas | bank
+    direction: str  # in | out
+    category: str
+    amount: float
+    note: str = ""
+
+class AssetInput(BaseModel):
+    name: str
+    category: str
+    purchase_date: str  # YYYY-MM-DD
+    purchase_cost: float
+    useful_life_months: int
+    salvage_value: float = 0
+
 def public_user(user):
     return {"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"]}
 
@@ -545,6 +561,99 @@ async def delete_opex(opex_id: str, user=Depends(admin_only)):
         await log_activity(user, "delete", "opex", opex_id, f"Beban {existing.get('category')} · {existing.get('period')} · {money_str(existing.get('amount', 0))} dihapus", {"period": existing.get("period"), "category": existing.get("category"), "amount": existing.get("amount")})
     return {"deleted": opex_id}
 
+# ---------- Cash movements & Fixed assets (accounting) ----------
+
+CASH_MOVEMENT_CATEGORIES = {"modal_masuk", "tarik_pribadi", "pinjaman_diterima", "bayar_cicilan_pinjaman", "transfer_kas_bank", "lain_lain"}
+
+@api_router.get("/cash-movements")
+async def list_cash_movements(user=Depends(admin_only)):
+    return await db.cash_movements.find({}, {"_id": 0}).sort("date", -1).to_list(500)
+
+@api_router.post("/cash-movements")
+async def create_cash_movement(input: CashMovementInput, user=Depends(admin_only)):
+    import re
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", input.date):
+        raise HTTPException(422, "Tanggal harus format YYYY-MM-DD")
+    if input.account not in {"kas", "bank"}:
+        raise HTTPException(422, "Akun harus kas atau bank")
+    if input.direction not in {"in", "out"}:
+        raise HTTPException(422, "Arah harus in atau out")
+    if input.category not in CASH_MOVEMENT_CATEGORIES:
+        raise HTTPException(422, f"Kategori tidak valid. Pilih: {', '.join(sorted(CASH_MOVEMENT_CATEGORIES))}")
+    if input.amount <= 0:
+        raise HTTPException(422, "Nominal harus positif")
+    doc = {"id": str(uuid.uuid4()), **input.model_dump(), "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.cash_movements.insert_one(doc)
+    await log_activity(user, "create", "cash_movement", doc["id"], f"Kas/Bank {input.direction.upper()} · {input.account} · {input.category} · {money_str(input.amount)}", {"account": input.account, "direction": input.direction, "amount": input.amount})
+    doc.pop("_id", None)
+    return doc
+
+@api_router.delete("/cash-movements/{cm_id}")
+async def delete_cash_movement(cm_id: str, user=Depends(admin_only)):
+    existing = await db.cash_movements.find_one({"id": cm_id}, {"_id": 0})
+    r = await db.cash_movements.delete_one({"id": cm_id})
+    if r.deleted_count != 1:
+        raise HTTPException(404, "Transaksi tidak ditemukan")
+    if existing:
+        await log_activity(user, "delete", "cash_movement", cm_id, f"Kas/Bank {existing.get('direction','').upper()} · {existing.get('category')} · {money_str(existing.get('amount', 0))} dihapus")
+    return {"deleted": cm_id}
+
+def _asset_derived(asset, at_iso=None):
+    from datetime import date as _date
+    at = _date.fromisoformat(at_iso[:10]) if at_iso else datetime.now(timezone.utc).date()
+    try:
+        purchase = _date.fromisoformat(asset["purchase_date"])
+    except Exception:
+        return {"monthly_dep": 0, "elapsed_months": 0, "accumulated_dep": 0, "book_value": asset.get("purchase_cost", 0)}
+    life = max(1, int(asset.get("useful_life_months", 1)))
+    salvage = float(asset.get("salvage_value", 0))
+    cost = float(asset.get("purchase_cost", 0))
+    monthly = (cost - salvage) / life
+    if at < purchase:
+        elapsed = 0
+    else:
+        elapsed = min(life, (at.year - purchase.year) * 12 + (at.month - purchase.month))
+    accumulated = round(elapsed * monthly, 2)
+    book = round(cost - accumulated, 2)
+    return {"monthly_dep": round(monthly, 2), "elapsed_months": elapsed, "accumulated_dep": accumulated, "book_value": book}
+
+@api_router.get("/assets")
+async def list_assets(user=Depends(admin_only)):
+    rows = await db.fixed_assets.find({}, {"_id": 0}).sort("purchase_date", -1).to_list(500)
+    for r in rows:
+        r["derived"] = _asset_derived(r)
+    return rows
+
+@api_router.post("/assets")
+async def create_asset(input: AssetInput, user=Depends(admin_only)):
+    import re
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", input.purchase_date):
+        raise HTTPException(422, "Tanggal beli harus format YYYY-MM-DD")
+    if input.purchase_cost <= 0:
+        raise HTTPException(422, "Harga perolehan harus positif")
+    if input.useful_life_months <= 0:
+        raise HTTPException(422, "Masa manfaat harus > 0 bulan")
+    if input.salvage_value < 0 or input.salvage_value >= input.purchase_cost:
+        raise HTTPException(422, "Nilai sisa harus 0 sampai < harga perolehan")
+    doc = {"id": str(uuid.uuid4()), **input.model_dump(), "status": "aktif", "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.fixed_assets.insert_one(doc)
+    await log_activity(user, "create", "asset", doc["id"], f"Aset {input.name} · {input.category} · {money_str(input.purchase_cost)} · masa manfaat {input.useful_life_months} bln", {"cost": input.purchase_cost, "life_months": input.useful_life_months})
+    doc.pop("_id", None)
+    doc["derived"] = _asset_derived(doc)
+    return doc
+
+@api_router.delete("/assets/{asset_id}")
+async def delete_asset(asset_id: str, user=Depends(admin_only)):
+    existing = await db.fixed_assets.find_one({"id": asset_id}, {"_id": 0})
+    r = await db.fixed_assets.delete_one({"id": asset_id})
+    if r.deleted_count != 1:
+        raise HTTPException(404, "Aset tidak ditemukan")
+    if existing:
+        await log_activity(user, "delete", "asset", asset_id, f"Aset {existing.get('name')} dihapus")
+    return {"deleted": asset_id}
+
+
+
 @api_router.get("/activity-logs")
 async def activity_logs(action: str = Query(""), entity: str = Query(""), user_email: str = Query(""), limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), user=Depends(admin_only)):
     q = {}
@@ -677,9 +786,57 @@ async def reports(channel: str = Query("Semua"), granularity: str = Query("all")
         p_opex = await _opex_total(p_start, p_end, channel == "Semua")
         previous = _aggregate(p_sales, p_purchases, p_production, p_opex)
     inventory = await db.inventory.find({}, {"_id": 0}).to_list(1000)
-    inventory_value = sum(item.get("value", 0) for item in inventory)
-    assets = inventory_value + max(current["cash_net"], 0)
-    liabilities = 21800000
+    persediaan_bahan = sum(x.get("value", 0) for x in inventory if x.get("type") == "Bahan Baku")
+    persediaan_barang_jadi = sum(x.get("value", 0) for x in inventory if x.get("type") == "Barang Jadi")
+    inventory_value = persediaan_bahan + persediaan_barang_jadi
+    # Cash & bank from manual cash_movements (independent of period for balance sheet snapshot)
+    all_cm = await db.cash_movements.find({}, {"_id": 0}).to_list(2000)
+    kas_manual_in = sum(m["amount"] for m in all_cm if m.get("account") == "kas" and m.get("direction") == "in")
+    kas_manual_out = sum(m["amount"] for m in all_cm if m.get("account") == "kas" and m.get("direction") == "out")
+    bank_in = sum(m["amount"] for m in all_cm if m.get("account") == "bank" and m.get("direction") == "in")
+    bank_out = sum(m["amount"] for m in all_cm if m.get("account") == "bank" and m.get("direction") == "out")
+    # Sales/purchases/production/opex ALL time affect operational kas (regardless of report period filter)
+    all_sales = await db.sales_transactions.find({}, {"_id": 0}).to_list(5000)
+    all_purchases = await db.purchases.find({}, {"_id": 0}).to_list(5000)
+    all_production = await db.production.find({}, {"_id": 0}).to_list(5000)
+    all_opex = await db.operating_expenses.find({}, {"_id": 0}).to_list(2000)
+    op_cash_in = sum(s.get("revenue", 0) for s in all_sales)
+    op_cash_out = sum(p.get("total", 0) for p in all_purchases) + sum(pr.get("total_cost", 0) for pr in all_production) + sum(o.get("amount", 0) for o in all_opex)
+    kas = op_cash_in - op_cash_out + kas_manual_in - kas_manual_out
+    bank = bank_in - bank_out
+    # Fixed assets
+    all_assets = await db.fixed_assets.find({}, {"_id": 0}).to_list(500)
+    total_perolehan = sum(a.get("purchase_cost", 0) for a in all_assets)
+    total_akumulasi_penyusutan = 0
+    fixed_asset_items = []
+    for a in all_assets:
+        d = _asset_derived(a)
+        total_akumulasi_penyusutan += d["accumulated_dep"]
+        fixed_asset_items.append({"id": a.get("id"), "name": a.get("name"), "category": a.get("category"), "purchase_cost": a.get("purchase_cost", 0), "accumulated_dep": d["accumulated_dep"], "book_value": d["book_value"]})
+    total_nilai_buku_aset = total_perolehan - total_akumulasi_penyusutan
+    # Aset lancar total
+    total_aset_lancar = max(kas, 0) + max(bank, 0) + persediaan_bahan + persediaan_barang_jadi
+    total_assets = total_aset_lancar + total_nilai_buku_aset
+    # Liabilities from cash_movements
+    utang_pinjaman_masuk = sum(m["amount"] for m in all_cm if m.get("category") == "pinjaman_diterima")
+    utang_pinjaman_bayar = sum(m["amount"] for m in all_cm if m.get("category") == "bayar_cicilan_pinjaman")
+    utang_pinjaman = max(0, utang_pinjaman_masuk - utang_pinjaman_bayar)
+    total_liabilities = utang_pinjaman
+    # Equity from owner
+    modal_masuk = sum(m["amount"] for m in all_cm if m.get("category") == "modal_masuk")
+    tarik_pribadi = sum(m["amount"] for m in all_cm if m.get("category") == "tarik_pribadi")
+    modal_disetor = modal_masuk - tarik_pribadi
+    laba_ditahan = total_assets - total_liabilities - modal_disetor
+    balance_detail = {
+        "assets": {
+            "lancar": {"kas": kas, "bank": bank, "persediaan_bahan": persediaan_bahan, "persediaan_barang_jadi": persediaan_barang_jadi, "total": total_aset_lancar},
+            "tetap": {"items": fixed_asset_items, "total_perolehan": total_perolehan, "total_akumulasi_penyusutan": total_akumulasi_penyusutan, "total_nilai_buku": total_nilai_buku_aset},
+            "total": total_assets,
+        },
+        "liabilities": {"utang_pinjaman": utang_pinjaman, "total": total_liabilities},
+        "equity": {"modal_disetor": modal_disetor, "laba_ditahan": laba_ditahan, "total": modal_disetor + laba_ditahan},
+    }
+    # Keep legacy top-level flat fields for backward compat with old clients
     channel_summary = {}
     if channel == "Semua":
         for name in ["Offline", "Bazar", "Shopee", "Tokopedia", "TikTok"]:
@@ -688,7 +845,7 @@ async def reports(channel: str = Query("Semua"), granularity: str = Query("all")
     deltas = None
     if previous:
         deltas = {"revenue_pct": _pct(current["revenue"], previous["revenue"]), "net_profit_pct": _pct(current["net_profit"], previous["net_profit"]), "cash_net_pct": _pct(current["cash_net"], previous["cash_net"])}
-    return {"period": label, "previous_period": p_label if previous else None, "granularity": granularity, "channel": channel, "transaction_count": current["transaction_count"], "income": {"revenue": current["revenue"], "cogs": current["cogs"], "gross_profit": current["gross_profit"], "operating_expense": current["operating_expense"], "net_profit": current["net_profit"]}, "balance": {"assets": assets, "liabilities": liabilities, "equity": assets - liabilities}, "cash": {"in": current["cash_in"], "out": current["cash_out"], "net": current["cash_net"]}, "previous": previous, "deltas": deltas, "channel_summary": channel_summary}
+    return {"period": label, "previous_period": p_label if previous else None, "granularity": granularity, "channel": channel, "transaction_count": current["transaction_count"], "income": {"revenue": current["revenue"], "cogs": current["cogs"], "gross_profit": current["gross_profit"], "operating_expense": current["operating_expense"], "net_profit": current["net_profit"]}, "balance": {"assets": total_assets, "liabilities": total_liabilities, "equity": total_assets - total_liabilities, "detail": balance_detail}, "cash": {"in": current["cash_in"], "out": current["cash_out"], "net": current["cash_net"]}, "previous": previous, "deltas": deltas, "channel_summary": channel_summary}
 
 # Add your routes to the router instead of directly to app
 @api_router.get("/")
