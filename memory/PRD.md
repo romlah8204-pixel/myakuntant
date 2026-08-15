@@ -54,6 +54,11 @@ Aplikasi untuk usaha manufaktur fashion: pembelian bahan baku, produksi, persedi
   - **Donut Metode Pembayaran** di Dashboard: `GET /api/payment-methods-summary?months=6` mengembalikan breakdown per bulan + donut bulan terkini. Legend menampilkan Tunai/QRIS/Kartu/Transfer/Bayar Nanti dengan warna khusus, tren stacked-bar 6 bulan.
   - **Sinkron Alokasi ↔ Siap Dijual**: Filter kanal di halaman Siap Dijual sekarang membaca `channel_stock` — SKU yang tidak dialokasikan ke channel tersebut disembunyikan. Filter "Semua" menampilkan chips per-channel qty (`Shopee · 1`, `Tokopedia · 1`, `bebas · 2`).
   - Backend 23/23 pytest PASS iter21 (fix balance-detail kas double count), frontend semua UI flow diverifikasi via screenshot.
+- **Margin POS Setting + PDF Export + Stok Minimum per Kanal (Feb 15, 2026)**:
+  - **Margin POS Setting** (`/api/settings/pos` GET/PUT): admin bisa atur `default_margin_pct` (0-500) & `round_to` (1/100/500/1000/5000/10000) di Profile. POS Kasir otomatis hitung harga = HPP × (1+margin%) → dibulatkan ke terdekat. Badge "MARGIN 60% · BULAT Rp 1.000" tampil di header POS. Kasir tetap bisa override harga per item.
+  - **PDF Export Laporan Bulanan**: Reports page render hidden `.print-only-full` block yang berisi L/R + Neraca PSAK (2-kolom) + Arus Kas dalam layout A4 print-friendly. Tombol "Ekspor PDF" → `window.print()`. CSS `@media print` menyembunyikan sidebar/nav/interaksi.
+  - **Stok Minimum per Kanal**: Modal Alokasi sekarang punya 2 kolom (QTY & MIN) per channel. Endpoint `GET /api/inventory/low-stock-alerts` mengembalikan alerts dengan severity critical/warning/watch. Panel merah muda "STOK MINIMUM · N kanal butuh perhatian" muncul di halaman Persediaan dengan top-6 alerts.
+  - Backend 21/21 pytest PASS iter22, frontend 4 fitur diverifikasi via testing_agent. Zero critical/minor bugs.
 - Backend testing 42/42 PASS iter16+iter17 (accounting + depreciation)
 - Backend testing 38/38 PASS iter12 (setelah fix bug None-date sort di cash_out drill-down)
 

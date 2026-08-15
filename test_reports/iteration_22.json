@@ -1,0 +1,26 @@
+{
+  "summary": "Iter22 testing: POS settings API (GET/PUT with role guards, validation), inventory allocate with min stock per channel + backward compat, low-stock-alerts (critical/warning/watch), Reports PDF export, Profile POS setting admin-only. Backend: 21/21 pytest PASSED. Frontend: all 4 flagged UI features verified via Playwright with correct data-testids (setting-margin-input, setting-round-select, setting-margin-submit, setting-success, pos-margin-badge, low-stock-alert-panel, low-stock-alert-<sku>-<channel>, alloc-min-<Channel>, report-export-pdf-button, print-only-full). Admin can update margin -> 75% / round 5000 -> setting-success visible -> POS badge live-updates to 'MARGIN 75% · BULAT Rp 5.000'. Kasir profile does NOT show setting section (isAdmin gate correct). window.print() firing on PDF button click confirmed. Low-stock returned 4 alerts for LIN-OVR-001 across 4 channels. Margin restored to 60/1000 after tests.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter22_pos_settings_alerts.py",
+    "/app/test_reports/pytest/iter22.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py L716 POSSettingsInput uses default_margin_pct: float — accepts values like 60.5. UI limits step=1 but API allows fractional. Non-blocking, but consider Field(..., ge=0, le=500) with pydantic v2 for consistent 422 via schema.",
+    "server.py L697 low-stock-alerts filters {channel_min_stock: {$exists: true}} — SKUs that never had allocate() called are excluded even if all channels are 0. Intentional (min>0 required), but note: if admin removes min by setting to 0 the SKU still shows in query but is skipped by min_val<=0 guard. Fine.",
+    "server.py L707 severity logic: `if current <= min_val: severity = 'critical'/'warning'/'watch'` — since 'watch' only fires when current==min_val AND current>0, boundary is correct. Verified in tests.",
+    "Allocate endpoint accepts int OR dict per channel — mixing is fine, but there's no test that mixed body ({Shopee:5, Tokopedia:{qty:3,min:1}}) works. Added dict-only and int-only paths. Consider adding mixed test in future.",
+    "App.js POS computePrice uses `Math.round(price/rt)*rt` (round-half) but requirement says 'dibulatkan ke atas' in the settings help text. Actual UI text says 'dibulatkan ke atas ke pembulatan' but code uses nearest. Minor inconsistency between copy and behavior — either update copy to 'dibulatkan ke terdekat' or change to Math.ceil."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter22_pos_settings_alerts.py (new)"
+  ],
+  "success_rate": {"backend": "100% (21/21)", "frontend": "100% (all 4 features verified)"},
+  "test_credentials": "admin@liniar.id/Liniar123!, kasir@liniar.id/Kasir123!, keuangan@liniar.id/Keuangan123!, gudang@liniar.id/Gudang123! — all verified working",
+  "seed_data_creation": "None. Used existing seed. Tests mutate LIN-OVR-001 channel_stock/min but restore is not needed as final state (Shopee qty=3 min=3 watch) is idempotent. POS setting restored to defaults (60/1000).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "iter22 test file covers POS settings CRUD+role guards, allocate with min (dict/int/negative/bahan-baku), low-stock-alerts severity levels (critical/warning/watch), and regression on /reports balance PSAK, /receivables-payables, /inventory channel_stock. Auth uses httpOnly cookies via requests.Session (no bearer). Balance keys are simple: bal['assets'], bal['liabilities'], bal['equity']. Nav testids use Indonesian: nav-profil, nav-kasir, nav-persediaan, nav-laporan (not nav-profile/nav-pos/nav-inventory/nav-reports). Copy vs behavior mismatch on POS rounding (says 'ke atas' but code uses Math.round) — flagged for main agent, not blocking."
+}

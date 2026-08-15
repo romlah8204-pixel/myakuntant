@@ -654,7 +654,8 @@ async def import_sales_csv(file: UploadFile = File(...), channel: str = Query(..
 
 @api_router.post("/inventory/{sku}/allocate")
 async def allocate_channel_stock(sku: str, body: dict, user=Depends(current_user)):
-    """Set channel-level stock allocation for a SKU. body: {channel: qty}."""
+    """Set channel-level stock allocation for a SKU. body: {channel: qty} atau {channel: {qty, min}}.
+    Backward-compat: nilai integer diperlakukan sebagai qty (min tidak berubah)."""
     valid = {"Shopee", "Tokopedia", "TikTok", "Offline", "Bazar", "POS"}
     item = await db.inventory.find_one({"sku": sku}, {"_id": 0})
     if not item:
@@ -662,11 +663,22 @@ async def allocate_channel_stock(sku: str, body: dict, user=Depends(current_user
     if item.get("type") != "Barang Jadi":
         raise HTTPException(422, "Alokasi hanya untuk barang jadi")
     channel_stock = {}
+    channel_min = dict(item.get("channel_min_stock") or {})
     for k, v in (body or {}).items():
         if k not in valid:
             raise HTTPException(422, f"Kanal {k} tidak valid")
         try:
-            q = int(v)
+            if isinstance(v, dict):
+                q = int(v.get("qty", 0))
+                if "min" in v:
+                    m = int(v.get("min", 0))
+                    if m < 0:
+                        raise HTTPException(422, f"Min stock {k} tidak boleh negatif")
+                    channel_min[k] = m
+            else:
+                q = int(v)
+        except HTTPException:
+            raise
         except Exception:
             raise HTTPException(422, f"Nilai untuk {k} harus angka")
         if q < 0:
@@ -675,10 +687,55 @@ async def allocate_channel_stock(sku: str, body: dict, user=Depends(current_user
     total_alloc = sum(channel_stock.values())
     if total_alloc > item.get("available", 0):
         raise HTTPException(409, f"Total alokasi ({total_alloc}) melebihi stok tersedia ({item.get('available', 0)})")
-    await db.inventory.update_one({"sku": sku}, {"$set": {"channel_stock": channel_stock, "channel_stock_updated_at": datetime.now(timezone.utc).isoformat()}})
-    await log_activity(user, "allocate", "inventory", sku, f"Alokasi kanal {sku} · " + " · ".join(f"{k}:{v}" for k, v in channel_stock.items()), channel_stock)
-    fresh = await db.inventory.find_one({"sku": sku}, {"_id": 0})
-    return {"sku": sku, "channel_stock": channel_stock, "unallocated": item.get("available", 0) - total_alloc, "total_available": item.get("available", 0)}
+    await db.inventory.update_one({"sku": sku}, {"$set": {"channel_stock": channel_stock, "channel_min_stock": channel_min, "channel_stock_updated_at": datetime.now(timezone.utc).isoformat()}})
+    await log_activity(user, "allocate", "inventory", sku, f"Alokasi kanal {sku} · " + " · ".join(f"{k}:{v}" for k, v in channel_stock.items()) + (f" · min={channel_min}" if channel_min else ""), {"channel_stock": channel_stock, "channel_min_stock": channel_min})
+    return {"sku": sku, "channel_stock": channel_stock, "channel_min_stock": channel_min, "unallocated": item.get("available", 0) - total_alloc, "total_available": item.get("available", 0)}
+
+@api_router.get("/inventory/low-stock-alerts")
+async def low_stock_alerts(user=Depends(current_user)):
+    """Return SKU-channel pairs dimana channel_stock <= channel_min_stock (dan min > 0)."""
+    items = await db.inventory.find({"type": "Barang Jadi", "channel_min_stock": {"$exists": True}}, {"_id": 0}).to_list(1000)
+    alerts = []
+    for it in items:
+        cs = it.get("channel_stock") or {}
+        cm = it.get("channel_min_stock") or {}
+        for ch, min_val in cm.items():
+            if not min_val or min_val <= 0:
+                continue
+            current = cs.get(ch, 0)
+            if current <= min_val:
+                alerts.append({"sku": it["sku"], "name": it.get("name"), "variant": it.get("variant"), "channel": ch, "current": current, "min": min_val, "shortfall": min_val - current + 1, "severity": "critical" if current == 0 else ("warning" if current < min_val else "watch")})
+    alerts.sort(key=lambda a: (a["severity"] != "critical", a["current"] - a["min"]))
+    return {"alerts": alerts, "count": len(alerts), "critical": len([a for a in alerts if a["severity"] == "critical"])}
+
+
+# ---------- Settings (POS margin) ----------
+SETTINGS_KEY = "pos_config"
+DEFAULT_POS_SETTINGS = {"default_margin_pct": 60, "round_to": 1000, "margin_by_type": {}}
+
+class POSSettingsInput(BaseModel):
+    default_margin_pct: float = 60
+    round_to: int = 1000
+    margin_by_type: dict = {}
+
+@api_router.get("/settings/pos")
+async def get_pos_settings(user=Depends(current_user)):
+    doc = await db.settings.find_one({"key": SETTINGS_KEY}, {"_id": 0})
+    if not doc:
+        return {"key": SETTINGS_KEY, **DEFAULT_POS_SETTINGS}
+    return {"key": SETTINGS_KEY, "default_margin_pct": doc.get("default_margin_pct", 60), "round_to": doc.get("round_to", 1000), "margin_by_type": doc.get("margin_by_type", {})}
+
+@api_router.put("/settings/pos")
+async def update_pos_settings(input: POSSettingsInput, user=Depends(admin_only)):
+    if input.default_margin_pct < 0 or input.default_margin_pct > 500:
+        raise HTTPException(422, "Margin harus 0-500%")
+    if input.round_to not in {1, 100, 500, 1000, 5000, 10000}:
+        raise HTTPException(422, "Pembulatan harus salah satu: 1, 100, 500, 1.000, 5.000, 10.000")
+    payload = {"key": SETTINGS_KEY, "default_margin_pct": input.default_margin_pct, "round_to": input.round_to, "margin_by_type": input.margin_by_type or {}, "updated_at": datetime.now(timezone.utc).isoformat(), "updated_by": user.get("email")}
+    await db.settings.update_one({"key": SETTINGS_KEY}, {"$set": payload}, upsert=True)
+    await log_activity(user, "update", "settings", SETTINGS_KEY, f"POS setting · margin {input.default_margin_pct}% · round {input.round_to}", {"default_margin_pct": input.default_margin_pct, "round_to": input.round_to})
+    return {"ok": True, **payload}
+
 
 @api_router.post("/auth/change-password")
 async def change_password(input: PasswordChangeInput, user=Depends(current_user)):
