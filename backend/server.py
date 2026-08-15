@@ -69,6 +69,7 @@ class SaleInput(BaseModel):
     unit_price: float
     customer: str = "Pelanggan umum"
     order_ref: str = ""
+    payment_method: str = ""  # tunai | qris | kartu | transfer | ""
 
 class OpExInput(BaseModel):
     period: str
@@ -135,9 +136,26 @@ async def current_user(request: Request):
     except (jwt.InvalidTokenError, KeyError):
         raise HTTPException(401, "Sesi telah berakhir")
 
+ADMIN_ROLES = {"admin", "owner"}
+FINANCE_ROLES = {"admin", "owner", "admin_keuangan"}
+PRODUCTION_ROLES = {"admin", "owner", "manajer_produksi"}
+CASHIER_ROLES = {"admin", "owner", "kasir"}
+WAREHOUSE_ROLES = {"admin", "owner", "staf_gudang", "manajer_produksi"}
+ALL_KNOWN_ROLES = {"admin", "owner", "staff", "admin_keuangan", "manajer_produksi", "kasir", "staf_gudang"}
+
 async def admin_only(user=Depends(current_user)):
-    if user.get("role") != "admin":
-        raise HTTPException(403, "Akses hanya untuk administrator")
+    if user.get("role") not in ADMIN_ROLES:
+        raise HTTPException(403, "Akses hanya untuk owner/admin")
+    return user
+
+async def finance_only(user=Depends(current_user)):
+    if user.get("role") not in FINANCE_ROLES:
+        raise HTTPException(403, "Akses hanya untuk owner/admin keuangan")
+    return user
+
+async def cashier_role(user=Depends(current_user)):
+    if user.get("role") not in CASHIER_ROLES:
+        raise HTTPException(403, "Akses hanya untuk kasir/owner")
     return user
 
 async def log_activity(user, action: str, entity: str, entity_id: str, summary: str, details: dict = None):
@@ -170,6 +188,16 @@ async def seed_data():
     staff_email = "staff@liniar.id"
     if not await db.users.find_one({"email": staff_email}):
         await db.users.insert_one({"id": str(uuid.uuid4()), "email": staff_email, "password_hash": bcrypt.hashpw(b"Staff123!", bcrypt.gensalt()).decode(), "name": "Staf Produksi", "role": "staff"})
+    # Seed granular role demo accounts (Owner mode uses admin@liniar.id)
+    demo_roles = [
+        ("keuangan@liniar.id", "Keuangan123!", "Admin Keuangan", "admin_keuangan"),
+        ("produksi@liniar.id", "Produksi123!", "Manajer Produksi", "manajer_produksi"),
+        ("kasir@liniar.id", "Kasir123!", "Kasir Toko", "kasir"),
+        ("gudang@liniar.id", "Gudang123!", "Staf Gudang", "staf_gudang"),
+    ]
+    for email, pw, name, role in demo_roles:
+        if not await db.users.find_one({"email": email}):
+            await db.users.insert_one({"id": str(uuid.uuid4()), "email": email, "password_hash": bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode(), "name": name, "role": role})
     if await db.inventory.count_documents({}) == 0:
         await db.inventory.insert_many([
             {"id":"inv-1","sku":"LIN-OVR-001","name":"Overshirt Linen Terra","variant":"M / Terra","type":"Barang Jadi","stock":42,"available":36,"unit":"pcs","value":7560000,"status":"Sehat"},
@@ -258,7 +286,7 @@ async def ledger(start: str = Query(""), end: str = Query(""), kind: str = Query
     start/end: ISO date strings (YYYY-MM-DD). kind: '' | 'purchase' | 'production' | 'sale' | 'opex'.
     channel: 'Semua' | 'Offline' | 'Bazar' | 'Shopee' | 'Tokopedia' | 'TikTok' — only affects sales rows.
     """
-    valid_channels = {"Semua", "Offline", "Bazar", "Shopee", "Tokopedia", "TikTok"}
+    valid_channels = {"Semua", "Offline", "Bazar", "Shopee", "Tokopedia", "TikTok", "POS"}
     if channel not in valid_channels:
         raise HTTPException(422, "Kanal tidak valid")
     start_iso = f"{start}T00:00:00+00:00" if start else ""
@@ -523,7 +551,7 @@ async def sales(user=Depends(current_user)):
 
 @api_router.post("/sales")
 async def create_sale(input: SaleInput, user=Depends(current_user)):
-    if input.channel not in {"Offline", "Bazar", "Shopee", "Tokopedia", "TikTok"}:
+    if input.channel not in {"Offline", "Bazar", "Shopee", "Tokopedia", "TikTok", "POS"}:
         raise HTTPException(422, "Kanal penjualan tidak valid")
     if input.quantity < 1 or input.unit_price < 0:
         raise HTTPException(422, "Jumlah dan harga harus valid")
@@ -543,6 +571,90 @@ async def create_sale(input: SaleInput, user=Depends(current_user)):
     await log_activity(user, "create", "sale", doc["id"], f"Penjualan {doc['invoice']} · {input.channel} · {input.quantity} {item.get('unit','pcs')} {input.sku} · {money_str(revenue)}", {"channel": input.channel, "sku": input.sku, "quantity": input.quantity, "revenue": revenue})
     doc.pop("_id", None)
     return doc
+
+@api_router.post("/sales/import-csv")
+async def import_sales_csv(file: UploadFile = File(...), channel: str = Query(...), user=Depends(current_user)):
+    """Import sales from marketplace CSV. Expected columns (flexible): sku, quantity, unit_price, customer, order_ref, date.
+    date optional. Missing rows are skipped and reported."""
+    if channel not in {"Offline", "Bazar", "Shopee", "Tokopedia", "TikTok", "POS"}:
+        raise HTTPException(422, "Kanal tidak valid")
+    import csv, io
+    try:
+        raw = (await file.read()).decode("utf-8-sig")
+    except Exception:
+        raise HTTPException(422, "File harus CSV UTF-8")
+    reader = csv.DictReader(io.StringIO(raw))
+    if not reader.fieldnames:
+        raise HTTPException(422, "CSV kosong atau format tidak dikenal")
+    # Normalize headers to lowercase
+    fmap = {(h or "").strip().lower(): h for h in reader.fieldnames}
+    def col(row, *names):
+        for n in names:
+            k = fmap.get(n)
+            if k is not None and row.get(k) not in (None, ""):
+                return str(row[k]).strip()
+        return ""
+    success, skipped = [], []
+    for i, row in enumerate(reader, start=2):
+        try:
+            sku = col(row, "sku", "kode_sku", "product_code")
+            qty_raw = col(row, "quantity", "qty", "jumlah")
+            price_raw = col(row, "unit_price", "harga", "price", "harga_satuan")
+            customer = col(row, "customer", "nama_pelanggan", "buyer") or "Pelanggan CSV"
+            order_ref = col(row, "order_ref", "invoice", "order_id", "no_pesanan")
+            if not sku or not qty_raw or not price_raw:
+                skipped.append({"row": i, "reason": "sku/qty/price kosong"}); continue
+            qty = int(float(qty_raw.replace(".", "").replace(",", ".")))
+            price = float(price_raw.replace(".", "").replace(",", "."))
+            if qty < 1 or price < 0:
+                skipped.append({"row": i, "reason": "qty atau price tidak valid"}); continue
+            item = await db.inventory.find_one({"sku": sku}, {"_id": 0})
+            if not item:
+                skipped.append({"row": i, "reason": f"SKU {sku} tidak ada"}); continue
+            if item.get("available", 0) < qty:
+                skipped.append({"row": i, "reason": f"stok {sku} kurang (sisa {item.get('available',0)})"}); continue
+            unit_cost = item.get("value", 0) / max(item.get("stock", 1), 1)
+            revenue = qty * price
+            cogs = qty * unit_cost
+            doc = {"id": str(uuid.uuid4()), "invoice": order_ref or f"INV-{datetime.now().strftime('%y%m%d')}-{str(uuid.uuid4())[:4].upper()}", "channel": channel, "sku": sku, "quantity": qty, "unit_price": price, "customer": customer, "order_ref": order_ref, "payment_method": "", "revenue": revenue, "cogs": round(cogs, 2), "gross_profit": round(revenue - cogs, 2), "created_at": datetime.now(timezone.utc).isoformat(), "status": "Lunas", "imported_from_csv": True}
+            r = await db.inventory.update_one({"sku": sku, "available": {"$gte": qty}}, {"$inc": {"stock": -qty, "available": -qty}})
+            if r.modified_count != 1:
+                skipped.append({"row": i, "reason": "stok berubah saat import"}); continue
+            await db.sales_transactions.insert_one(doc)
+            success.append({"row": i, "invoice": doc["invoice"], "sku": sku, "qty": qty, "revenue": revenue})
+        except Exception as e:
+            skipped.append({"row": i, "reason": f"error: {str(e)[:60]}"})
+    total_revenue = sum(s["revenue"] for s in success)
+    await log_activity(user, "import", "sale", "csv", f"Impor CSV {channel} · {len(success)} sukses, {len(skipped)} skip · {money_str(total_revenue)}", {"channel": channel, "imported": len(success), "skipped": len(skipped), "total_revenue": total_revenue})
+    return {"imported": len(success), "skipped": len(skipped), "success_rows": success[:50], "skipped_rows": skipped[:50], "total_revenue": total_revenue, "channel": channel}
+
+@api_router.post("/inventory/{sku}/allocate")
+async def allocate_channel_stock(sku: str, body: dict, user=Depends(current_user)):
+    """Set channel-level stock allocation for a SKU. body: {channel: qty}."""
+    valid = {"Shopee", "Tokopedia", "TikTok", "Offline", "Bazar", "POS"}
+    item = await db.inventory.find_one({"sku": sku}, {"_id": 0})
+    if not item:
+        raise HTTPException(404, "SKU tidak ditemukan")
+    if item.get("type") != "Barang Jadi":
+        raise HTTPException(422, "Alokasi hanya untuk barang jadi")
+    channel_stock = {}
+    for k, v in (body or {}).items():
+        if k not in valid:
+            raise HTTPException(422, f"Kanal {k} tidak valid")
+        try:
+            q = int(v)
+        except Exception:
+            raise HTTPException(422, f"Nilai untuk {k} harus angka")
+        if q < 0:
+            raise HTTPException(422, f"Alokasi {k} tidak boleh negatif")
+        channel_stock[k] = q
+    total_alloc = sum(channel_stock.values())
+    if total_alloc > item.get("available", 0):
+        raise HTTPException(409, f"Total alokasi ({total_alloc}) melebihi stok tersedia ({item.get('available', 0)})")
+    await db.inventory.update_one({"sku": sku}, {"$set": {"channel_stock": channel_stock, "channel_stock_updated_at": datetime.now(timezone.utc).isoformat()}})
+    await log_activity(user, "allocate", "inventory", sku, f"Alokasi kanal {sku} · " + " · ".join(f"{k}:{v}" for k, v in channel_stock.items()), channel_stock)
+    fresh = await db.inventory.find_one({"sku": sku}, {"_id": 0})
+    return {"sku": sku, "channel_stock": channel_stock, "unallocated": item.get("available", 0) - total_alloc, "total_available": item.get("available", 0)}
 
 @api_router.post("/auth/change-password")
 async def change_password(input: PasswordChangeInput, user=Depends(current_user)):
@@ -999,7 +1111,7 @@ async def download_backup(backup_id: str, user=Depends(admin_only)):
 @api_router.get("/sales-by-channel")
 async def sales_by_channel(user=Depends(current_user)):
     id_month = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
-    channels = ["Offline", "Bazar", "Shopee", "Tokopedia", "TikTok"]
+    channels = ["Offline", "Bazar", "Shopee", "Tokopedia", "TikTok", "POS"]
     now = datetime.now(timezone.utc)
     months = []
     for i in range(5, -1, -1):
@@ -1019,7 +1131,7 @@ async def sales_by_channel(user=Depends(current_user)):
 
 @api_router.get("/reports")
 async def reports(channel: str = Query("Semua"), granularity: str = Query("all"), period: str = Query(""), user=Depends(admin_only)):
-    valid_channels = {"Semua", "Offline", "Bazar", "Shopee", "Tokopedia", "TikTok"}
+    valid_channels = {"Semua", "Offline", "Bazar", "Shopee", "Tokopedia", "TikTok", "POS"}
     if channel not in valid_channels:
         raise HTTPException(422, "Kanal laporan tidak valid")
     if granularity not in {"all", "monthly", "quarterly"}:
@@ -1125,7 +1237,7 @@ async def reports(channel: str = Query("Semua"), granularity: str = Query("all")
     # Keep legacy top-level flat fields for backward compat with old clients
     channel_summary = {}
     if channel == "Semua":
-        for name in ["Offline", "Bazar", "Shopee", "Tokopedia", "TikTok"]:
+        for name in ["Offline", "Bazar", "Shopee", "Tokopedia", "TikTok", "POS"]:
             rows = [t for t in sales if t.get("channel") == name]
             channel_summary[name] = {"revenue": sum(r.get("revenue", 0) for r in rows), "count": len(rows)}
     deltas = None

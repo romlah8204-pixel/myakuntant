@@ -1,0 +1,51 @@
+{
+  "summary": "Iteration 19 backend + frontend testing complete for Fashion Manufacturing (Liniar) app new features: POS channel + payment_method, 5-role granular RBAC, CSV import, per-channel stock allocation. All 28 backend pytest cases passed (100%). Frontend menu filtering verified for all 4 new roles with exact match. POS UI checkout with QRIS + receipt printing works end-to-end. Import CSV UI processes valid + invalid rows correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter19_roles_pos.py",
+    "/app/test_reports/pytest/iter19.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "App.js is a single 74-line file but each line is extremely long (>7000 chars each). File is essentially minified inline JSX - very hard to review, maintain, or diff. Strongly recommend splitting into per-component files (POSKasir.jsx, ImportCSV.jsx, Inventory.jsx, KasBank.jsx, etc.) and running prettier. This is the #1 maintainability risk.",
+    "CORS_ORIGINS='*' in backend/.env combined with allow_credentials will fail in strict browsers; only works today because CORS middleware is not actively enforced from the given file (need to verify). Should be explicit origin list for production.",
+    "sales/import-csv uses current_user (any authenticated role) — intentional per spec note, but staf_gudang/kasir could import for arbitrary channels. Consider restricting to admin/admin_keuangan or logging channel for audit.",
+    "POS default price heuristic (value/stock * 1.6 rounded to nearest 1000, fallback 100000) is fragile — a barang jadi with zero value would default to Rp 100.000. Consider persisting an explicit list price on inventory."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter19_roles_pos.py (new)"
+  ],
+  "success_rate": {"backend": "100% (28/28)", "frontend": "100% on tested flows"},
+  "test_credentials": "All 6 demo accounts verified working: admin@liniar.id/Liniar123!, keuangan@liniar.id/Keuangan123!, produksi@liniar.id/Produksi123!, kasir@liniar.id/Kasir123!, gudang@liniar.id/Gudang123!, staff@liniar.id/Staff123!",
+  "seed_data_creation": "Consumed 2 units of LIN-OVR-001 via POS + CSV import (TEST_ prefixed customers). Set channel_stock allocations on a barang jadi. No cleanup performed as data is demo-only.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter19 adds POS channel (channel='POS' allowed in /api/sales and /api/ledger valid_channels). 4 new roles seeded: admin_keuangan, manajer_produksi, kasir, staf_gudang. admin_only accepts only {admin, owner} — admin_keuangan intentionally gets 403 on kas-movements/assets/receivables-payables/reports/ledger (by design; frontend just hides menu). New endpoints: POST /api/sales/import-csv?channel=X (multipart, any authenticated user), POST /api/inventory/{sku}/allocate (barang jadi only, 6 valid channels). Frontend has testids: pos-*, import-*, alloc-* — all verified working.",
+  "verified_features": [
+    "5 demo logins (admin, keuangan, produksi, kasir, gudang) + legacy staff",
+    "POS sale (channel=POS, payment_method=qris) by kasir role",
+    "Invalid channel returns 422",
+    "Kasir gets 403 on /cash-movements, /assets, /receivables-payables, /ledger",
+    "staf_gudang gets 403 on admin endpoints",
+    "admin_keuangan gets 403 on /cash-movements (by design — menu hidden but backend admin_only)",
+    "admin gets 200 on /cash-movements",
+    "CSV import Shopee: 1 imported + 2 skipped (missing SKU, qty=0) with reasons",
+    "CSV import invalid channel → 422",
+    "Allocate stock across 5 channels succeeds when total <= available",
+    "Allocate over available → 409",
+    "Allocate on Bahan Baku → 422",
+    "Allocate invalid channel → 422",
+    "Regression: /balance-detail?kind=kas, /receivables-payables, /ledger all still return 200",
+    "Frontend menu filter EXACT match for kasir, admin_keuangan, manajer_produksi, staf_gudang (no missing, no forbidden visible)",
+    "Frontend POS full flow: search → add to cart → set QRIS → checkout → receipt with invoice + total (Rp 712.000, invoice INV-260815-F6FE)",
+    "Frontend Import CSV: file upload → summary shows imported/skipped counts"
+  ]
+}
