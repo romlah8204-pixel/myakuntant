@@ -222,10 +222,14 @@ async def inventory_history(sku: str, user=Depends(current_user)):
     return {"sku": sku, "name": item.get("name"), "variant": item.get("variant"), "unit": item.get("unit"), "current_available": item.get("available", 0), "events": events}
 
 @api_router.get("/ledger")
-async def ledger(start: str = Query(""), end: str = Query(""), kind: str = Query(""), user=Depends(admin_only)):
+async def ledger(start: str = Query(""), end: str = Query(""), kind: str = Query(""), channel: str = Query("Semua"), user=Depends(admin_only)):
     """Combined chronological ledger of all business transactions.
     start/end: ISO date strings (YYYY-MM-DD). kind: '' | 'purchase' | 'production' | 'sale' | 'opex'.
+    channel: 'Semua' | 'Offline' | 'Bazar' | 'Shopee' | 'Tokopedia' | 'TikTok' — only affects sales rows.
     """
+    valid_channels = {"Semua", "Offline", "Bazar", "Shopee", "Tokopedia", "TikTok"}
+    if channel not in valid_channels:
+        raise HTTPException(422, "Kanal tidak valid")
     start_iso = f"{start}T00:00:00+00:00" if start else ""
     end_iso = f"{end}T23:59:59+00:00" if end else ""
     entries = []
@@ -238,7 +242,8 @@ async def ledger(start: str = Query(""), end: str = Query(""), kind: str = Query
             if _iso_between(pr.get("created_at", ""), start_iso, end_iso):
                 entries.append({"date": pr.get("created_at", ""), "type": "production", "ref": pr.get("batch"), "description": f"Produksi · {pr.get('product')} {pr.get('output_qty')} unit · HPP {money_str(pr.get('hpp', 0))}/unit", "in": 0, "out": pr.get("total_cost", 0)})
     if kind in ("", "sale"):
-        for s in await db.sales_transactions.find({}, {"_id": 0}).to_list(5000):
+        sale_query = {} if channel == "Semua" else {"channel": channel}
+        for s in await db.sales_transactions.find(sale_query, {"_id": 0}).to_list(5000):
             if _iso_between(s.get("created_at", ""), start_iso, end_iso):
                 entries.append({"date": s.get("created_at", ""), "type": "sale", "ref": s.get("invoice"), "description": f"Penjualan {s.get('channel')} · {s.get('sku')} {s.get('quantity')} pcs · {s.get('customer')}", "in": s.get("revenue", 0), "out": 0})
     if kind in ("", "opex"):
@@ -253,12 +258,12 @@ async def ledger(start: str = Query(""), end: str = Query(""), kind: str = Query
         e["balance"] = balance
     total_in = sum(e["in"] for e in entries)
     total_out = sum(e["out"] for e in entries)
-    return {"entries": entries, "count": len(entries), "total_in": total_in, "total_out": total_out, "net": total_in - total_out, "start": start, "end": end, "kind": kind}
+    return {"entries": entries, "count": len(entries), "total_in": total_in, "total_out": total_out, "net": total_in - total_out, "start": start, "end": end, "kind": kind, "channel": channel}
 
 @api_router.get("/ledger/export.csv")
-async def ledger_csv(start: str = Query(""), end: str = Query(""), kind: str = Query(""), user=Depends(admin_only)):
+async def ledger_csv(start: str = Query(""), end: str = Query(""), kind: str = Query(""), channel: str = Query("Semua"), user=Depends(admin_only)):
     import csv, io
-    data = await ledger(start=start, end=end, kind=kind, user=user)  # reuse
+    data = await ledger(start=start, end=end, kind=kind, channel=channel, user=user)  # reuse
     buf = io.StringIO()
     w = csv.writer(buf, quoting=csv.QUOTE_MINIMAL)
     w.writerow(["date", "type", "ref", "description", "kas_masuk", "kas_keluar", "saldo"])

@@ -1,0 +1,33 @@
+{
+  "summary": "Iter14 backend testing complete. Ledger channel filter (/api/ledger and /api/ledger/export.csv) works correctly. 17/17 tests passed for iter14. Regression across iter5-iter13 mostly clean (78/80), 2 failures in iter11 are pre-existing and unrelated to iter14 scope.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/public/catalog + /api/public/product/{sku}/photo", "issue": "Pre-existing (iter11): seed SKU LIN-OVR-001 has no photo -> has_photo=False and photo endpoint returns 404. Not related to iter14."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter14_ledger_channel.py",
+    "/app/test_reports/pytest/iter14.xml"
+  ],
+  "action_items": [
+    "(Optional/out-of-scope) Fix seed data to attach a photo for LIN-OVR-001 or update iter11 tests to reflect no seeded photos."
+  ],
+  "critical_code_review_comments": [
+    "server.py ledger() validates channel against a whitelist and raises 422 with clear Indonesian message — good.",
+    "sale_query correctly uses {} for 'Semua' and {'channel': channel} otherwise, keeping non-sale rows untouched — matches spec.",
+    "ledger_csv reuses ledger() logic (DRY) — good.",
+    "Minor: response echoes 'channel' field only in ledger; CSV endpoint does not surface channel but that's acceptable for CSV."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter14_ledger_channel.py (new)"
+  ],
+  "success_rate": {"backend": "100% (17/17 iter14)", "frontend": "n/a"},
+  "test_credentials": "admin@liniar.id / Liniar123!, staff@liniar.id / Staff123! (from prompt)",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter14 fully green. test_iter14_ledger_channel.py covers channel filter (Shopee/Tokopedia/TikTok), 422 invalid, 401/403 auth, non-sale rows unaffected, CSV export, and iter5-13 sanity endpoints. Pre-existing iter11 seed photo issue persists.",
+  "rca of the issue": "N/A - iter14 passed."
+}
