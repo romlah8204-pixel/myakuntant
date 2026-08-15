@@ -1,0 +1,44 @@
+{
+  "summary": "Iter12 backend testing: 37/38 tests PASS (97.4%). Verified /api/ledger (shape, ASC sort, running balance, kind filters, date range, RBAC), /api/ledger/export.csv (headers, filename, kind filter, RBAC), /api/inventory/{sku}/history (shape, ASC + running balance, staff access, 404, no-auth, produksi event after new batch), /api/reports/detail (shape, all 6 valid kinds, 422 for invalid, channel filter Shopee, monthly period, opex+channel!=Semua returns empty, RBAC), and cross-check revenue detail total == /api/reports income.revenue for 2026-08. Regression: auth/me, inventory, ready-to-sell, reports, sales-by-channel, activity-logs, public catalog all PASS. One failure: /api/reports/detail?kind=cash_out (granularity=all) returns HTTP 500 due to sort on None dates.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "GET /api/reports/detail?kind=cash_out (default granularity=all)",
+        "issue": "HTTP 500 TypeError: '<' not supported between instances of 'NoneType' and 'str' at server.py:321 `rows.sort(key=lambda r: r[\\\"date\\\"], reverse=True)`. Some purchase/production docs have created_at=None, producing row['date']=None. Fix: use `key=lambda r: r.get('date') or ''` (or filter None), and also apply the same sort key defensively in other kinds that read created_at.",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "GET /api/ledger (end filter)",
+        "issue": "_iso_between uses `iso_str >= end` (strict), so records exactly at 23:59:59 on the end date are excluded. Spec calls for inclusive end. Consider `> end` or set end_iso to next-day 00:00:00."
+      },
+      {
+        "endpoint": "GET /api/ledger?kind=invalid",
+        "issue": "Silently returns empty entries with kind='invalid' echoed back — acceptable per spec (NOT critical), but ideally should validate kind against allowed set and return 422 like /reports/detail does."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter12_ledger_drilldown.py",
+    "/app/test_reports/pytest/iter12_results.xml"
+  ],
+  "action_items": [
+    "Fix server.py:321 cash_out sort crash — replace `key=lambda r: r['date']` with `key=lambda r: r.get('date') or ''` (and consider ensuring row['date'] is never None by defaulting to empty string when appending)."
+  ],
+  "critical_code_review_comments": [
+    "server.py:321 – NoneType sort bug in /api/reports/detail cash_out branch (HTTP 500).",
+    "server.py:201 – _iso_between end filter is exclusive of exact 23:59:59; slightly inconsistent with docstring/spec claiming inclusive end.",
+    "server.py:280 – _period_range is called before its definition (line 460+) at module load only inside function scope, works because Python resolves at call time — brittle but functional. Consider reordering helpers.",
+    "server.py file size now ~777 lines — approaching threshold to split into modules (ledger.py, reports.py, inventory.py)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter12_ledger_drilldown.py"],
+  "success_rate": {"backend": "97.4% (37/38)", "frontend": "not tested (backend only)"},
+  "test_credentials": "admin@liniar.id / Liniar123!  •  staff@liniar.id / Staff123!",
+  "seed_data_creation": "Created 1 production batch during test_history_produksi_after_new_batch (output_qty=3 for existing Barang Jadi SKU) to verify produksi event surfacing.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter12 has 1 real backend bug: cash_out drill-down without period → 500 (None date sort). All other 37 tests pass including revenue<->reports cross-check. When retesting, ensure Aug-2026 cash_out (period-filtered) still works after fix. Test file: /app/backend/tests/test_iter12_ledger_drilldown.py.",
+  "rca of the issue": "GET /api/reports/detail?kind=cash_out (no period) crashes at server.py:321 with TypeError comparing NoneType and str. Reproduction: login as admin then GET /api/reports/detail?kind=cash_out. Root cause: cash_out branch aggregates purchases + production + opex; when in_range() has no start (granularity=all), all rows pass, and any doc missing created_at yields row['date']=None. rows.sort then crashes. Mitigation: `rows.sort(key=lambda r: r.get('date') or '', reverse=True)` OR default date at append time: `row['date'] = p.get('created_at') or ''`."
+}

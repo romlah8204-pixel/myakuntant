@@ -191,6 +191,139 @@ async def ready_to_sell(user=Depends(current_user)):
     items = await db.inventory.find({"type": "Barang Jadi", "available": {"$gt": 0}}, {"_id": 0}).to_list(100)
     return [{**item, "ready_qty": item.get("available", 0), "sell_status": "Siap dijual" if item.get("available", 0) > 5 else "Stok terbatas"} for item in items]
 
+# ---------- Ledger, drill-down, and SKU history helpers ----------
+
+def _iso_between(iso_str, start, end):
+    if not iso_str:
+        return False
+    if start and iso_str < start:
+        return False
+    if end and iso_str >= end:
+        return False
+    return True
+
+@api_router.get("/inventory/{sku}/history")
+async def inventory_history(sku: str, user=Depends(current_user)):
+    item = await db.inventory.find_one({"sku": sku}, {"_id": 0})
+    if not item:
+        raise HTTPException(404, "SKU tidak ditemukan")
+    events = []
+    prods = await db.production.find({"sku": sku}, {"_id": 0}).sort("created_at", 1).to_list(1000)
+    for p in prods:
+        events.append({"date": p.get("created_at", ""), "type": "produksi", "ref": p.get("batch"), "in": p.get("output_qty", 0), "out": 0, "note": f"Batch produksi · HPP {p.get('hpp', 0)}/unit"})
+    sales = await db.sales_transactions.find({"sku": sku}, {"_id": 0}).sort("created_at", 1).to_list(1000)
+    for s in sales:
+        events.append({"date": s.get("created_at", ""), "type": "penjualan", "ref": s.get("invoice"), "in": 0, "out": s.get("quantity", 0), "note": f"{s.get('channel')} · {s.get('customer')} · {money_str(s.get('revenue', 0))}"})
+    events.sort(key=lambda e: e["date"])
+    balance = 0
+    for e in events:
+        balance += e["in"] - e["out"]
+        e["balance"] = balance
+    return {"sku": sku, "name": item.get("name"), "variant": item.get("variant"), "unit": item.get("unit"), "current_available": item.get("available", 0), "events": events}
+
+@api_router.get("/ledger")
+async def ledger(start: str = Query(""), end: str = Query(""), kind: str = Query(""), user=Depends(admin_only)):
+    """Combined chronological ledger of all business transactions.
+    start/end: ISO date strings (YYYY-MM-DD). kind: '' | 'purchase' | 'production' | 'sale' | 'opex'.
+    """
+    start_iso = f"{start}T00:00:00+00:00" if start else ""
+    end_iso = f"{end}T23:59:59+00:00" if end else ""
+    entries = []
+    if kind in ("", "purchase"):
+        for p in await db.purchases.find({}, {"_id": 0}).to_list(5000):
+            if _iso_between(p.get("created_at", ""), start_iso, end_iso):
+                entries.append({"date": p.get("created_at", ""), "type": "purchase", "ref": p.get("po"), "description": f"PO bahan · {p.get('supplier')} · {p.get('material')} {p.get('quantity')} {p.get('unit')}", "in": 0, "out": p.get("total", 0)})
+    if kind in ("", "production"):
+        for pr in await db.production.find({}, {"_id": 0}).to_list(5000):
+            if _iso_between(pr.get("created_at", ""), start_iso, end_iso):
+                entries.append({"date": pr.get("created_at", ""), "type": "production", "ref": pr.get("batch"), "description": f"Produksi · {pr.get('product')} {pr.get('output_qty')} unit · HPP {money_str(pr.get('hpp', 0))}/unit", "in": 0, "out": pr.get("total_cost", 0)})
+    if kind in ("", "sale"):
+        for s in await db.sales_transactions.find({}, {"_id": 0}).to_list(5000):
+            if _iso_between(s.get("created_at", ""), start_iso, end_iso):
+                entries.append({"date": s.get("created_at", ""), "type": "sale", "ref": s.get("invoice"), "description": f"Penjualan {s.get('channel')} · {s.get('sku')} {s.get('quantity')} pcs · {s.get('customer')}", "in": s.get("revenue", 0), "out": 0})
+    if kind in ("", "opex"):
+        for o in await db.operating_expenses.find({}, {"_id": 0}).to_list(5000):
+            iso = o.get("created_at") or f"{o.get('period', '2020-01')}-01T00:00:00+00:00"
+            if _iso_between(iso, start_iso, end_iso):
+                entries.append({"date": iso, "type": "opex", "ref": o.get("period"), "description": f"Beban {o.get('category')} · {o.get('period')}{' · ' + o.get('note') if o.get('note') else ''}", "in": 0, "out": o.get("amount", 0)})
+    entries.sort(key=lambda x: x["date"])
+    balance = 0
+    for e in entries:
+        balance += e["in"] - e["out"]
+        e["balance"] = balance
+    total_in = sum(e["in"] for e in entries)
+    total_out = sum(e["out"] for e in entries)
+    return {"entries": entries, "count": len(entries), "total_in": total_in, "total_out": total_out, "net": total_in - total_out, "start": start, "end": end, "kind": kind}
+
+@api_router.get("/ledger/export.csv")
+async def ledger_csv(start: str = Query(""), end: str = Query(""), kind: str = Query(""), user=Depends(admin_only)):
+    import csv, io
+    data = await ledger(start=start, end=end, kind=kind, user=user)  # reuse
+    buf = io.StringIO()
+    w = csv.writer(buf, quoting=csv.QUOTE_MINIMAL)
+    w.writerow(["date", "type", "ref", "description", "kas_masuk", "kas_keluar", "saldo"])
+    for e in data["entries"]:
+        w.writerow([e["date"], e["type"], e["ref"], e["description"], e["in"], e["out"], e["balance"]])
+    w.writerow([])
+    w.writerow(["", "", "", "TOTAL", data["total_in"], data["total_out"], data["net"]])
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return Response(content=buf.getvalue(), media_type="text/csv; charset=utf-8", headers={"Content-Disposition": f'attachment; filename="liniar-bukubesar-{ts}.csv"'})
+
+@api_router.get("/reports/detail")
+async def reports_detail(kind: str = Query(...), channel: str = Query("Semua"), granularity: str = Query("all"), period: str = Query(""), user=Depends(admin_only)):
+    """Return underlying rows that make up a report card.
+    kind: 'revenue' | 'cogs' | 'purchases' | 'production' | 'opex' | 'cash_out'
+    """
+    valid_kinds = {"revenue", "cogs", "purchases", "production", "opex", "cash_out"}
+    if kind not in valid_kinds:
+        raise HTTPException(422, "kind tidak valid")
+    start, end, label, _, _, _ = _period_range(granularity, period) if granularity != "all" else (None, None, "Semua Periode", None, None, None)
+    def in_range(iso):
+        if not start:
+            return True
+        return start <= (iso or "") < end
+    channel_q = {} if channel == "Semua" else {"channel": channel}
+    rows = []
+    if kind in ("revenue", "cogs"):
+        sales = await db.sales_transactions.find(channel_q, {"_id": 0}).sort("created_at", -1).to_list(2000)
+        for s in sales:
+            if not in_range(s.get("created_at", "")):
+                continue
+            rows.append({"date": s.get("created_at") or "", "ref": s.get("invoice"), "description": f"{s.get('channel')} · {s.get('sku')} {s.get('quantity')} pcs · {s.get('customer')}", "amount": s.get("revenue", 0) if kind == "revenue" else s.get("cogs", 0)})
+    elif kind == "purchases":
+        for p in await db.purchases.find({}, {"_id": 0}).sort("created_at", -1).to_list(2000):
+            if in_range(p.get("created_at", "")):
+                rows.append({"date": p.get("created_at") or "", "ref": p.get("po"), "description": f"{p.get('supplier')} · {p.get('material')} {p.get('quantity')} {p.get('unit')}", "amount": p.get("total", 0)})
+    elif kind == "production":
+        for pr in await db.production.find({}, {"_id": 0}).sort("created_at", -1).to_list(2000):
+            if in_range(pr.get("created_at", "")):
+                rows.append({"date": pr.get("created_at") or "", "ref": pr.get("batch"), "description": f"{pr.get('product')} · {pr.get('output_qty')} unit", "amount": pr.get("total_cost", 0)})
+    elif kind == "opex":
+        opex_rows = await db.operating_expenses.find({}, {"_id": 0}).to_list(2000)
+        for o in opex_rows:
+            if channel != "Semua":
+                continue
+            if start and not _period_in_range(o.get("period", ""), start, end):
+                continue
+            rows.append({"date": o.get("created_at") or f"{o.get('period', '')}-01T00:00:00+00:00", "ref": o.get("period"), "description": f"{o.get('category')} · {o.get('period')}", "amount": o.get("amount", 0)})
+    elif kind == "cash_out":
+        for p in await db.purchases.find({}, {"_id": 0}).to_list(2000):
+            if in_range(p.get("created_at", "")):
+                rows.append({"date": p.get("created_at") or "", "ref": p.get("po"), "description": f"PO · {p.get('supplier')} · {p.get('material')}", "amount": p.get("total", 0)})
+        for pr in await db.production.find({}, {"_id": 0}).to_list(2000):
+            if in_range(pr.get("created_at", "")):
+                rows.append({"date": pr.get("created_at") or "", "ref": pr.get("batch"), "description": f"Produksi · {pr.get('product')}", "amount": pr.get("total_cost", 0)})
+        if channel == "Semua":
+            for o in await db.operating_expenses.find({}, {"_id": 0}).to_list(2000):
+                if start and not _period_in_range(o.get("period", ""), start, end):
+                    continue
+                rows.append({"date": o.get("created_at") or f"{o.get('period', '')}-01T00:00:00+00:00", "ref": o.get("period"), "description": f"Beban {o.get('category')}", "amount": o.get("amount", 0)})
+        rows.sort(key=lambda r: r.get("date") or "", reverse=True)
+    total = sum(r.get("amount", 0) for r in rows)
+    return {"kind": kind, "period": label, "channel": channel, "rows": rows, "count": len(rows), "total": total}
+
+
+
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
 EXT_FROM_MIME = {"image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp"}
 

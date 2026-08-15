@@ -1,0 +1,22 @@
+{
+  "summary": "Retest iter13 backend-only: fix bug HIGH iter12 pada GET /api/reports/detail?kind=cash_out (granularity=all default) yang sebelumnya crash 500 karena sort key None. Re-ran seluruh suite /app/backend/tests/test_iter12_ledger_drilldown.py: 38/38 PASS (100%). Verifikasi manual tambahan: kind=cash_out|purchases|production|revenue|cogs|opex tanpa granularity → semua 200 dengan period='Semua Periode' dan count/total valid. Filter kind=cash_out&granularity=monthly&period=2026-08 → 200, period='Agu 2026', count=325.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter12_ledger_drilldown.py",
+    "/app/test_reports/pytest/iter13_retest.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix di server.py reports_detail sudah defensive: setiap append rows menset date=r.get('created_at') or '' dan sort menggunakan r.get('date') or ''. Cukup robust untuk legacy docs tanpa created_at.",
+    "Saran opsional: normalisasi field 'created_at' menjadi ISO string saat write untuk mencegah issue serupa di masa depan (root cause: dokumen legacy dengan created_at=None)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "N/A"},
+  "test_credentials": "admin@liniar.id / Liniar123! (dari test_credentials iter sebelumnya)",
+  "seed_data_creation": "Tidak ada seed baru; menggunakan data eksisting.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter12 bug HIGH (cash_out sort NoneType) sudah SOLVED di iter13. Suite lengkap iter12 (38 tests) tetap pass. Endpoint /api/reports/detail untuk semua kind (revenue, cogs, opex, cash_out, purchases, production) stabil di granularity=all maupun monthly.",
+  "rca of the issue": "RCA: rows.sort(key=lambda r: r['date']) fails when some rows have date=None (from legacy docs missing created_at). Fix: (1) append rows dengan date=r.get('created_at') or '' fallback, (2) sort key pakai r.get('date') or ''. Verified: cash_out all-period returns 332 rows tanpa error."
+}
