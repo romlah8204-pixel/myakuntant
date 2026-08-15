@@ -5,6 +5,8 @@
 .channel-summary-panel h3{font:600 20px "Cormorant Garamond",serif;margin:4px 0 0}
 .channel-cards{display:grid;grid-template-columns:repeat(5,1fr);gap:16px}
 .channel-card{border:1px solid var(--line);padding:18px;display:flex;flex-direction:column;gap:8px;transition:transform .2s,border-color .2s}
+.channel-card.clickable{cursor:pointer}
+.channel-card.clickable:hover{border-color:var(--terra);box-shadow:0 4px 12px rgba(160,75,43,.15)}
 .channel-card:hover{transform:translateY(-2px);border-color:var(--terra)}
 .channel-card-head{display:flex;align-items:center;gap:8px}
 .channel-card-dot{width:10px;height:10px;border-radius:2px;flex-shrink:0}
