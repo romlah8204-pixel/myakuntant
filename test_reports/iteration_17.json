@@ -1,0 +1,22 @@
+{
+  "summary": "Iter17 PSAK balance sheet + /api/balance-detail drill-down validated end-to-end. Backend: 31/31 pytest passed (auth, invalid kind, row schema, saldo cross-check vs /api/reports for all 8 kinds, PSAK keys presence, neraca seimbang, regression on /reports/detail, ledger, cash-movements, assets, auth/me). Frontend: login as admin, /laporan Neraca tab renders all PSAK subtotals and 8 clickable rows; drill modal opens with bal-drill-row-0 populated for kas and modal_disetor.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter17_balance_detail.py",
+    "/app/test_reports/pytest/iter17_balance_detail.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py total_aset_lancar uses max(kas,0)+max(bank,0) which silently drops negative kas from total assets. In the seed dataset kas saldo is -Rp 715jt (operational cash-out > cash-in because ALL time is aggregated) — total Aset Lancar hides that. Consider: (a) allow negative kas to flow through (kas would then reduce assets, and laba_ditahan plug remains balanced), or (b) surface a UI warning when kas<0. The neraca still balances only because laba_ditahan is computed as a plug (total_assets - liabilities - modal_disetor), which masks any inconsistency. NOT a regression per review note but worth revisiting.",
+    "App.js Reports component is one giant single-line function (~line 40) — hard to review/maintain. Should be split into subcomponents (BalanceSheet, DrillModal) and formatted normally.",
+    "balance_detail 'kas' rows include ALL historical sales/purchases/production/opex — no period filter. Aligns with reports snapshot approach (which is also all-time), so consistent. OK."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter17_balance_detail.py"],
+  "success_rate": {"backend": "100% (31/31)", "frontend": "100% (all 15 testids + drill modal for kas/modal_disetor verified)"},
+  "test_credentials": "admin@liniar.id / Liniar123!, staff@liniar.id / Staff123!",
+  "seed_data_creation": "None (used existing seed).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_iter17_balance_detail.py covers all 8 balance kinds + PSAK structure. Reuse as regression. Note kas saldo is negative in current dataset — that's expected & tests handle it (utang_pinjaman test also handles clamped-vs-unclamped). Frontend testids stable: bal-row-<kind>, bal-drill-row-<i>, bal-subtotal-kas-setara, bal-subtotal-persediaan, bal-total-{lancar,aset,liab,eq,le}."
+}

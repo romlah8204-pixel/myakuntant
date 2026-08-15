@@ -44,6 +44,9 @@
 .modal-close:hover{color:var(--terra);border-color:var(--terra)}
 .report-card.clickable{cursor:pointer;transition:transform .2s,border-color .2s}
 .report-card.clickable:hover{transform:translateY(-2px);border-color:var(--terra)}
+.detail-row.clickable-row{transition:background .15s,padding-left .15s,border-color .15s}
+.detail-row.clickable-row:hover{background:var(--warm,#fbf4e6);padding-left:6px;border-bottom-color:var(--terra)}
+.detail-row.clickable-row:hover span{color:var(--terra)}
 
 .public-catalog{max-width:1240px;margin:0 auto;padding:40px 40px 80px;min-height:100vh;background:var(--bg,#fdf9f2)}
 .public-header{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid var(--terra);padding-bottom:24px;margin-bottom:32px;gap:24px;flex-wrap:wrap}

@@ -344,6 +344,103 @@ async def reports_detail(kind: str = Query(...), channel: str = Query("Semua"), 
     return {"kind": kind, "period": label, "channel": channel, "rows": rows, "count": len(rows), "total": total}
 
 
+BALANCE_KINDS = {
+    "kas": "Kas",
+    "bank": "Bank",
+    "persediaan_bahan": "Persediaan Bahan Baku",
+    "persediaan_barang_jadi": "Persediaan Barang Jadi",
+    "aset_tetap": "Aset Tetap",
+    "utang_pinjaman": "Utang Pinjaman (Jangka Panjang)",
+    "modal_disetor": "Modal Disetor",
+    "laba_ditahan": "Laba Ditahan",
+}
+
+@api_router.get("/balance-detail")
+async def balance_detail(kind: str = Query(...), user=Depends(admin_only)):
+    """Return the movements that build a Balance Sheet line so users can drill down.
+    Each row: {date, ref, description, direction: 'in'|'out', amount}.
+    """
+    if kind not in BALANCE_KINDS:
+        raise HTTPException(422, f"kind tidak valid. Pilih: {', '.join(sorted(BALANCE_KINDS.keys()))}")
+    rows = []
+    label = BALANCE_KINDS[kind]
+
+    if kind == "kas":
+        # Kas = operasional (semua penjualan cash-in − PO/produksi/opex cash-out) + cash_movements akun kas
+        for s in await db.sales_transactions.find({}, {"_id": 0}).to_list(5000):
+            rows.append({"date": s.get("created_at") or "", "ref": s.get("invoice"), "description": f"Penjualan {s.get('channel')} · {s.get('sku')} {s.get('quantity')} pcs · {s.get('customer')}", "direction": "in", "amount": s.get("revenue", 0)})
+        for p in await db.purchases.find({}, {"_id": 0}).to_list(5000):
+            rows.append({"date": p.get("created_at") or "", "ref": p.get("po"), "description": f"PO bahan · {p.get('supplier')} · {p.get('material')}", "direction": "out", "amount": p.get("total", 0)})
+        for pr in await db.production.find({}, {"_id": 0}).to_list(5000):
+            rows.append({"date": pr.get("created_at") or "", "ref": pr.get("batch"), "description": f"Produksi · {pr.get('product')} · {pr.get('output_qty')} unit", "direction": "out", "amount": pr.get("total_cost", 0)})
+        for o in await db.operating_expenses.find({}, {"_id": 0}).to_list(2000):
+            iso = o.get("created_at") or f"{o.get('period', '2020-01')}-01T00:00:00+00:00"
+            rows.append({"date": iso, "ref": o.get("period"), "description": f"Beban {o.get('category')} · {o.get('period')}", "direction": "out", "amount": o.get("amount", 0)})
+        for m in await db.cash_movements.find({"account": "kas"}, {"_id": 0}).to_list(2000):
+            iso = m.get("created_at") or f"{m.get('date','2020-01-01')}T00:00:00+00:00"
+            rows.append({"date": iso, "ref": m.get("id", "")[:8].upper(), "description": f"Kas · {m.get('category')}{' · ' + m.get('note') if m.get('note') else ''}", "direction": m.get("direction", "in"), "amount": m.get("amount", 0)})
+
+    elif kind == "bank":
+        for m in await db.cash_movements.find({"account": "bank"}, {"_id": 0}).to_list(2000):
+            iso = m.get("created_at") or f"{m.get('date','2020-01-01')}T00:00:00+00:00"
+            rows.append({"date": iso, "ref": m.get("id", "")[:8].upper(), "description": f"Bank · {m.get('category')}{' · ' + m.get('note') if m.get('note') else ''}", "direction": m.get("direction", "in"), "amount": m.get("amount", 0)})
+
+    elif kind == "utang_pinjaman":
+        for m in await db.cash_movements.find({"category": {"$in": ["pinjaman_diterima", "bayar_cicilan_pinjaman"]}}, {"_id": 0}).to_list(2000):
+            iso = m.get("created_at") or f"{m.get('date','2020-01-01')}T00:00:00+00:00"
+            # pinjaman_diterima menambah utang (in), bayar_cicilan mengurangi utang (out)
+            direction = "in" if m.get("category") == "pinjaman_diterima" else "out"
+            rows.append({"date": iso, "ref": m.get("id", "")[:8].upper(), "description": f"{m.get('category')} · {m.get('account')}{' · ' + m.get('note') if m.get('note') else ''}", "direction": direction, "amount": m.get("amount", 0)})
+
+    elif kind == "modal_disetor":
+        for m in await db.cash_movements.find({"category": {"$in": ["modal_masuk", "tarik_pribadi"]}}, {"_id": 0}).to_list(2000):
+            iso = m.get("created_at") or f"{m.get('date','2020-01-01')}T00:00:00+00:00"
+            direction = "in" if m.get("category") == "modal_masuk" else "out"
+            rows.append({"date": iso, "ref": m.get("id", "")[:8].upper(), "description": f"{m.get('category')} · {m.get('account')}{' · ' + m.get('note') if m.get('note') else ''}", "direction": direction, "amount": m.get("amount", 0)})
+
+    elif kind == "laba_ditahan":
+        # Laba ditahan = akumulasi laba bersih historis (revenue - cogs - opex - depresiasi seumur hidup)
+        for s in await db.sales_transactions.find({}, {"_id": 0}).to_list(5000):
+            rows.append({"date": s.get("created_at") or "", "ref": s.get("invoice"), "description": f"Laba kotor · {s.get('channel')} · {s.get('sku')}", "direction": "in", "amount": s.get("gross_profit", 0)})
+        for o in await db.operating_expenses.find({}, {"_id": 0}).to_list(2000):
+            iso = o.get("created_at") or f"{o.get('period', '2020-01')}-01T00:00:00+00:00"
+            rows.append({"date": iso, "ref": o.get("period"), "description": f"Beban ops · {o.get('category')} · {o.get('period')}", "direction": "out", "amount": o.get("amount", 0)})
+        all_assets_ld = await db.fixed_assets.find({}, {"_id": 0}).to_list(500)
+        for a in all_assets_ld:
+            d = _asset_derived(a)
+            if d["accumulated_dep"] > 0:
+                iso = a.get("created_at") or f"{a.get('purchase_date','2020-01-01')}T00:00:00+00:00"
+                rows.append({"date": iso, "ref": (a.get("id", "")[:8]).upper(), "description": f"Akumulasi penyusutan · {a.get('name')} ({d['elapsed_months']} bln)", "direction": "out", "amount": d["accumulated_dep"]})
+
+    elif kind == "persediaan_bahan":
+        for p in await db.purchases.find({}, {"_id": 0}).to_list(5000):
+            rows.append({"date": p.get("created_at") or "", "ref": p.get("po"), "description": f"Terima bahan · {p.get('supplier')} · {p.get('material')} {p.get('quantity')} {p.get('unit')}", "direction": "in", "amount": p.get("total", 0)})
+        for pr in await db.production.find({}, {"_id": 0}).to_list(5000):
+            mb = pr.get("material_breakdown") or []
+            for line in mb:
+                rows.append({"date": pr.get("created_at") or "", "ref": pr.get("batch"), "description": f"Pakai bahan · {line.get('material')} {line.get('qty_used')} {line.get('unit')} untuk {pr.get('product')}", "direction": "out", "amount": line.get("line_cost", 0)})
+
+    elif kind == "persediaan_barang_jadi":
+        for pr in await db.production.find({}, {"_id": 0}).to_list(5000):
+            rows.append({"date": pr.get("created_at") or "", "ref": pr.get("batch"), "description": f"Selesai produksi · {pr.get('product')} · {pr.get('output_qty')} unit", "direction": "in", "amount": pr.get("total_cost", 0)})
+        for s in await db.sales_transactions.find({}, {"_id": 0}).to_list(5000):
+            rows.append({"date": s.get("created_at") or "", "ref": s.get("invoice"), "description": f"Keluar (HPP) · {s.get('sku')} {s.get('quantity')} pcs · {s.get('channel')}", "direction": "out", "amount": s.get("cogs", 0)})
+
+    elif kind == "aset_tetap":
+        assets = await db.fixed_assets.find({}, {"_id": 0}).to_list(500)
+        for a in assets:
+            iso = a.get("created_at") or f"{a.get('purchase_date','2020-01-01')}T00:00:00+00:00"
+            rows.append({"date": iso, "ref": (a.get("id", "")[:8]).upper(), "description": f"Perolehan · {a.get('name')} ({a.get('category')}) · masa manfaat {a.get('useful_life_months')} bln", "direction": "in", "amount": a.get("purchase_cost", 0)})
+            d = _asset_derived(a)
+            if d["accumulated_dep"] > 0:
+                rows.append({"date": iso, "ref": (a.get("id", "")[:8]).upper(), "description": f"Akumulasi penyusutan · {a.get('name')} · {d['elapsed_months']}/{a.get('useful_life_months')} bln", "direction": "out", "amount": d["accumulated_dep"]})
+
+    rows.sort(key=lambda r: r.get("date") or "", reverse=True)
+    total_in = sum(r["amount"] for r in rows if r["direction"] == "in")
+    total_out = sum(r["amount"] for r in rows if r["direction"] == "out")
+    saldo = total_in - total_out
+    return {"kind": kind, "label": label, "rows": rows, "count": len(rows), "total_in": total_in, "total_out": total_out, "saldo": saldo}
+
 
 ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp"}
 EXT_FROM_MIME = {"image/jpeg": "jpg", "image/jpg": "jpg", "image/png": "png", "image/webp": "webp"}
@@ -617,6 +714,41 @@ def _asset_derived(asset, at_iso=None):
     book = round(cost - accumulated, 2)
     return {"monthly_dep": round(monthly, 2), "elapsed_months": elapsed, "accumulated_dep": accumulated, "book_value": book}
 
+
+def _dep_in_range(assets, start_iso, end_iso):
+    """Compute total straight-line depreciation for all assets within [start, end).
+    If start_iso is empty (all-time report), return sum of accumulated_dep-to-date."""
+    from datetime import date as _date
+    if not start_iso:
+        return sum(_asset_derived(a)["accumulated_dep"] for a in assets)
+    try:
+        start = _date.fromisoformat(start_iso[:10])
+        end = _date.fromisoformat(end_iso[:10])
+    except Exception:
+        return 0
+    total = 0.0
+    for a in assets:
+        try:
+            purchase = _date.fromisoformat(a.get("purchase_date", ""))
+        except Exception:
+            continue
+        life = max(1, int(a.get("useful_life_months", 1)))
+        salvage = float(a.get("salvage_value", 0))
+        cost = float(a.get("purchase_cost", 0))
+        monthly = (cost - salvage) / life
+        # asset ends depreciating after `life` months
+        life_end_year = purchase.year + (purchase.month - 1 + life) // 12
+        life_end_month = (purchase.month - 1 + life) % 12 + 1
+        life_end = _date(life_end_year, life_end_month, 1)
+        eff_start = max(start, purchase)
+        eff_end = min(end, life_end)
+        if eff_end <= eff_start:
+            continue
+        months = (eff_end.year - eff_start.year) * 12 + (eff_end.month - eff_start.month)
+        total += max(0, months) * monthly
+    return round(total, 2)
+
+
 @api_router.get("/assets")
 async def list_assets(user=Depends(admin_only)):
     rows = await db.fixed_assets.find({}, {"_id": 0}).sort("purchase_date", -1).to_list(500)
@@ -777,14 +909,21 @@ async def reports(channel: str = Query("Semua"), granularity: str = Query("all")
     purchases = await db.purchases.find(range_q(start, end), {"_id": 0}).to_list(2000)
     production = await db.production.find(range_q(start, end), {"_id": 0}).to_list(2000)
     opex = await _opex_total(start, end, channel == "Semua")
+    all_assets_for_dep = await db.fixed_assets.find({}, {"_id": 0}).to_list(500)
+    current_dep = _dep_in_range(all_assets_for_dep, start, end) if channel == "Semua" else 0
     current = _aggregate(sales, purchases, production, opex)
+    current["depreciation"] = current_dep
+    current["net_profit"] = current["gross_profit"] - current["operating_expense"] - current_dep
     previous = None
     if p_start:
         p_sales = await db.sales_transactions.find({**channel_q, **range_q(p_start, p_end)}, {"_id": 0}).to_list(2000)
         p_purchases = await db.purchases.find(range_q(p_start, p_end), {"_id": 0}).to_list(2000)
         p_production = await db.production.find(range_q(p_start, p_end), {"_id": 0}).to_list(2000)
         p_opex = await _opex_total(p_start, p_end, channel == "Semua")
+        p_dep = _dep_in_range(all_assets_for_dep, p_start, p_end) if channel == "Semua" else 0
         previous = _aggregate(p_sales, p_purchases, p_production, p_opex)
+        previous["depreciation"] = p_dep
+        previous["net_profit"] = previous["gross_profit"] - previous["operating_expense"] - p_dep
     inventory = await db.inventory.find({}, {"_id": 0}).to_list(1000)
     persediaan_bahan = sum(x.get("value", 0) for x in inventory if x.get("type") == "Bahan Baku")
     persediaan_barang_jadi = sum(x.get("value", 0) for x in inventory if x.get("type") == "Barang Jadi")
@@ -829,11 +968,17 @@ async def reports(channel: str = Query("Semua"), granularity: str = Query("all")
     laba_ditahan = total_assets - total_liabilities - modal_disetor
     balance_detail = {
         "assets": {
-            "lancar": {"kas": kas, "bank": bank, "persediaan_bahan": persediaan_bahan, "persediaan_barang_jadi": persediaan_barang_jadi, "total": total_aset_lancar},
+            "lancar": {"kas": kas, "bank": bank, "kas_setara_total": max(kas, 0) + max(bank, 0), "persediaan_bahan": persediaan_bahan, "persediaan_barang_jadi": persediaan_barang_jadi, "persediaan_total": persediaan_bahan + persediaan_barang_jadi, "total": total_aset_lancar},
             "tetap": {"items": fixed_asset_items, "total_perolehan": total_perolehan, "total_akumulasi_penyusutan": total_akumulasi_penyusutan, "total_nilai_buku": total_nilai_buku_aset},
+            "tidak_lancar_total": total_nilai_buku_aset,
             "total": total_assets,
         },
-        "liabilities": {"utang_pinjaman": utang_pinjaman, "total": total_liabilities},
+        "liabilities": {
+            "jangka_pendek": {"total": 0},
+            "jangka_panjang": {"utang_pinjaman": utang_pinjaman, "total": utang_pinjaman},
+            "utang_pinjaman": utang_pinjaman,
+            "total": total_liabilities,
+        },
         "equity": {"modal_disetor": modal_disetor, "laba_ditahan": laba_ditahan, "total": modal_disetor + laba_ditahan},
     }
     # Keep legacy top-level flat fields for backward compat with old clients
@@ -845,7 +990,7 @@ async def reports(channel: str = Query("Semua"), granularity: str = Query("all")
     deltas = None
     if previous:
         deltas = {"revenue_pct": _pct(current["revenue"], previous["revenue"]), "net_profit_pct": _pct(current["net_profit"], previous["net_profit"]), "cash_net_pct": _pct(current["cash_net"], previous["cash_net"])}
-    return {"period": label, "previous_period": p_label if previous else None, "granularity": granularity, "channel": channel, "transaction_count": current["transaction_count"], "income": {"revenue": current["revenue"], "cogs": current["cogs"], "gross_profit": current["gross_profit"], "operating_expense": current["operating_expense"], "net_profit": current["net_profit"]}, "balance": {"assets": total_assets, "liabilities": total_liabilities, "equity": total_assets - total_liabilities, "detail": balance_detail}, "cash": {"in": current["cash_in"], "out": current["cash_out"], "net": current["cash_net"]}, "previous": previous, "deltas": deltas, "channel_summary": channel_summary}
+    return {"period": label, "previous_period": p_label if previous else None, "granularity": granularity, "channel": channel, "transaction_count": current["transaction_count"], "income": {"revenue": current["revenue"], "cogs": current["cogs"], "gross_profit": current["gross_profit"], "operating_expense": current["operating_expense"], "depreciation": current["depreciation"], "net_profit": current["net_profit"]}, "balance": {"assets": total_assets, "liabilities": total_liabilities, "equity": total_assets - total_liabilities, "detail": balance_detail}, "cash": {"in": current["cash_in"], "out": current["cash_out"], "net": current["cash_net"]}, "previous": previous, "deltas": deltas, "channel_summary": channel_summary}
 
 # Add your routes to the router instead of directly to app
 @api_router.get("/")

@@ -1,0 +1,33 @@
+{
+  "summary": "Iteration 17 backend testing: verified new depreciation row in /api/reports.income. Wrote /app/backend/tests/test_iter17_depreciation.py with 11 tests covering: presence of income.depreciation & net_profit fields, net_profit formula (gross_profit - operating_expense - depreciation), non-Semua channel forces depreciation=0, monthly period 2026-08 with two deterministic assets (500k combined), previous-period block also adjusted, assets purchased AFTER period end contribute 0, expired assets (life_end < period start) contribute 0, quarterly Q3 2026 accumulates 3 months per asset (>=1.5M for A1+A2), depreciation is non-cash (cash.net = cash.in - cash.out), balance sheet A == L+E, and for granularity=all depreciation equals sum of total_akumulasi_penyusutan in balance detail. Also ran iter16 regression suite: 31/31 pass. All 11 iter17 tests PASS. Cleanup handled via fixture teardown deleting the 3 TEST_ prefixed assets.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter17_depreciation.py",
+    "/app/backend/tests/test_iter16_accounting.py",
+    "/app/test_reports/pytest/iter17_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "_dep_in_range uses date(year, month, 1) for life_end and truncates day component of start/end via _period_range -> _date.fromisoformat(iso[:10]). This is consistent (whole-month buckets) and produces the expected straight-line months count. Good.",
+    "For channel != 'Semua', depreciation is intentionally 0 (mirrors opex logic). This is consistent but may be surprising if users expect a per-channel PnL to show non-cash charges. Consider documenting in UI tooltip.",
+    "server.py is 981 lines — approaching the 700-line soft threshold; consider splitting reports/assets/cash_movements into modules (non-blocking).",
+    "balance_sheet detail computes total_akumulasi_penyusutan independently from _asset_derived; iter17 all-time depreciation uses same helper — verified they match (test_all_time_depreciation_equals_accumulated_sum passes)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter17_depreciation.py (new)"
+  ],
+  "success_rate": {"backend": "100% (11/11 iter17 + 31/31 iter16 regression)", "frontend": "not tested (backend-only request)"},
+  "test_credentials": "admin@liniar.id / Liniar123! (used from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Created 3 temporary assets (TEST_iter17_A1, A2, A3_expired) via POST /api/assets and deleted them in fixture teardown. No polluting data left in DB.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter17 depreciation feature fully verified. /api/reports.income now includes 'depreciation' and adjusted 'net_profit'. Non-cash: cash.in/out/net unaffected. For channel != Semua depreciation=0. For granularity=all, income.depreciation == balance.detail.assets.tetap.total_akumulasi_penyusutan. Existing seed asset (Mesin Jahit Juki 250k/mo starting 2025-06-01) remains in DB."
+}
