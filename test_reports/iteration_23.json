@@ -1,0 +1,26 @@
+{
+  "summary": "Iter23 features fully validated. Backend: 21/21 pytest PASSED covering Stock Adjustment (delta +/-), Stock Opname (set physical), edge cases (delta=0 → 422, overflow → 409, negative opname → 422, invalid kind → 422, unknown SKU → 404, unknown reason → auto-mapped to 'lainnya'), list adjustments (excludes _id), Kartu Stock XLSX export (all SKUs + single SKU + 404 for unknown, correct content-type + attachment header + PK magic bytes), reports.income.opex_breakdown (list of {category, amount} sorted desc), balance identity preserved after adjustments, POST /assets useful_life_months=0 → success with derived.book_value=purchase_cost and monthly_dep=0, useful_life_months=-1 → 422, and regression on /receivables-payables + /inventory + /inventory/{sku}/history. Frontend Playwright verified end-to-end: Persediaan shows export-all-excel-btn at top + per-row SO/Adj + Excel download buttons (excel-open-<sku>), Adjustment modal has both tabs (adj-kind-adjust / adj-kind-opname), fields (adj-delta / adj-physical / adj-reason / adj-note / adj-submit) and success/error messaging (adj-success shown as 'Adjustment tersimpan · stok 10 → 11'). Restored -1 successfully. Laporan → Laba Rugi shows opex-breakdown-panel with opex-breakdown-total='Rp 11.500.000' and per-category rows (opex-breakdown-gaji-karyawan, opex-breakdown-sewa) with progress bars. Aset Tetap category input uses datalist=asset-categories (free-form). Beban Ops category input uses datalist=opex-categories (free-form).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter23_stock_adj_opex_assets.py",
+    "/app/test_reports/pytest/iter23.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py L753 unit_cost derivation: `item.get('value',0)/max(current_stock,1) if current_stock>0 else 0` — when current_stock=0 (e.g. opname from empty), new_value stays 0 regardless of physical_qty. Acceptable for now (avg-cost approximation) but means opname from 0 → 100 loses inventory value entirely; may cause balance sheet reconciliation drift if used heavily. Consider surfacing 'nilai per unit' input on opname when current_stock=0.",
+    "server.py L747 reason normalization: empty reason defaults to 'opname'/'koreksi' by kind, then unknown non-empty reasons mapped to 'lainnya'. Fine, but if user passes 'lainnya' explicitly with a note, the actual reason context lives only in the note field — no dedicated `custom_reason_label` column. Minor UX limitation, not blocking.",
+    "server.py L735 opname: physical_qty default is -1 (in Pydantic model) as sentinel for 'not provided'. This works but is semantically confusing — a caller sending physical_qty=-1 explicitly gets a 422. Consider Optional[int]=None with explicit `if input.physical_qty is None: raise 422('required')` for clearer intent.",
+    "Frontend App.js Inventory reason <select> is fixed to STOCK_ADJUSTMENT_REASONS enum — backend already normalizes unknown reasons to 'lainnya', so consider making this a datalist (like OpEx/Assets) for consistency with 'free-form' philosophy of iter23.",
+    "opex-breakdown data-testid uses lowercased hyphen-joined category name (e.g. 'opex-breakdown-gaji-karyawan'). Categories with special chars or diacritics could produce invalid selectors — consider slugify + strip. Not a bug today (categories are ASCII)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter23_stock_adj_opex_assets.py (new)"
+  ],
+  "success_rate": {"backend": "100% (21/21)", "frontend": "100% (all 4 flows verified)"},
+  "test_credentials": "admin@liniar.id/Liniar123! — verified working via httpOnly cookie session",
+  "seed_data_creation": "None. Adjustments to LIN-OVR-001 are recorded but stock is restored via balanced +1/-1 and opname-restore in test flow. Test asset (TEST_Deposit Sewa iter23) is deleted in cleanup.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "iter23 test file located at /app/backend/tests/test_iter23_stock_adj_opex_assets.py. Uses REACT_APP_BACKEND_URL env from frontend/.env (set explicitly when running pytest since backend/.env doesn't have it). httpOnly session auth via requests.Session. All new endpoints: POST /api/inventory/{sku}/adjust (kind adjust|opname), GET /api/inventory/{sku}/adjustments, GET /api/inventory/stock-card.xlsx?sku=<optional>. Reports now include income.opex_breakdown list sorted desc. Assets accept useful_life_months=0 (non-depreciating). Frontend testids all present and correct: export-all-excel-btn, excel-open-<sku>, adj-open-<sku>, adj-kind-adjust, adj-kind-opname, adj-delta, adj-physical, adj-reason, adj-note, adj-submit, adj-success, adj-error, opex-breakdown-panel, opex-breakdown-total, opex-breakdown-<category-slug>. Nav testids Indonesian: nav-persediaan/nav-laporan/nav-aset/nav-beban (not nav-opex)."
+}

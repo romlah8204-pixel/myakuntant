@@ -112,6 +112,13 @@ class RPPaymentInput(BaseModel):
     account: str = "bank"  # kas | bank
     note: str = ""
 
+class StockAdjustmentInput(BaseModel):
+    kind: str  # "opname" (set to physical_qty) | "adjust" (delta)
+    physical_qty: int = -1  # required for opname
+    delta_qty: int = 0  # signed, required for adjust
+    reason: str = ""  # rusak, hilang, koreksi, opname, dsb
+    note: str = ""
+
 def public_user(user):
     return {"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"]}
 
@@ -709,6 +716,150 @@ async def low_stock_alerts(user=Depends(current_user)):
     return {"alerts": alerts, "count": len(alerts), "critical": len([a for a in alerts if a["severity"] == "critical"])}
 
 
+# ---------- Stock Adjustment & Opname ----------
+STOCK_ADJUSTMENT_REASONS = {"opname", "rusak", "hilang", "koreksi", "retur_pelanggan", "kadaluarsa", "lainnya"}
+
+@api_router.post("/inventory/{sku}/adjust")
+async def adjust_stock(sku: str, input: StockAdjustmentInput, user=Depends(current_user)):
+    """Adjust stock via manual delta (kind='adjust') or set to physical count (kind='opname').
+    Records to stock_adjustments collection + updates inventory + logs to activity."""
+    if input.kind not in {"opname", "adjust"}:
+        raise HTTPException(422, "kind harus 'opname' atau 'adjust'")
+    item = await db.inventory.find_one({"sku": sku}, {"_id": 0})
+    if not item:
+        raise HTTPException(404, "SKU tidak ditemukan")
+    current_stock = int(item.get("stock", 0))
+    current_available = int(item.get("available", 0))
+    reserved = current_stock - current_available  # unavailable amount (reserved/production)
+    if input.kind == "opname":
+        if input.physical_qty < 0:
+            raise HTTPException(422, "physical_qty wajib diisi untuk opname (>= 0)")
+        new_stock = int(input.physical_qty)
+        delta = new_stock - current_stock
+    else:
+        if input.delta_qty == 0:
+            raise HTTPException(422, "delta_qty tidak boleh 0 untuk adjust")
+        delta = int(input.delta_qty)
+        new_stock = current_stock + delta
+        if new_stock < 0:
+            raise HTTPException(409, f"Stok akan negatif ({new_stock}). Batas minimal 0.")
+    new_available = max(0, new_stock - reserved)
+    reason = input.reason.strip() or ("opname" if input.kind == "opname" else "koreksi")
+    if reason not in STOCK_ADJUSTMENT_REASONS:
+        reason = "lainnya"
+    adj_doc = {"id": str(uuid.uuid4()), "sku": sku, "kind": input.kind, "old_stock": current_stock, "new_stock": new_stock, "delta": delta, "physical_qty": input.physical_qty if input.kind == "opname" else None, "reason": reason, "note": input.note, "adjusted_by": user.get("email"), "adjusted_at": datetime.now(timezone.utc).isoformat()}
+    await db.stock_adjustments.insert_one(adj_doc)
+    # Update inventory: value proportional adjustment (approximate — use avg cost)
+    unit_cost = item.get("value", 0) / max(current_stock, 1) if current_stock > 0 else 0
+    new_value = max(0, new_stock * unit_cost)
+    await db.inventory.update_one({"sku": sku}, {"$set": {"stock": new_stock, "available": new_available, "value": round(new_value, 2)}})
+    await log_activity(user, input.kind, "inventory_adjust", adj_doc["id"], f"{input.kind.upper()} {sku} · {current_stock} → {new_stock} ({'+' if delta>=0 else ''}{delta}) · {reason}{' · ' + input.note if input.note else ''}", {"sku": sku, "kind": input.kind, "delta": delta, "reason": reason})
+    adj_doc.pop("_id", None)
+    return {"ok": True, "adjustment": adj_doc, "sku": sku, "old_stock": current_stock, "new_stock": new_stock, "delta": delta, "unit_cost": round(unit_cost, 2), "new_value": round(new_value, 2)}
+
+@api_router.get("/inventory/{sku}/adjustments")
+async def list_adjustments(sku: str, user=Depends(current_user)):
+    rows = await db.stock_adjustments.find({"sku": sku}, {"_id": 0}).sort("adjusted_at", -1).to_list(500)
+    return {"items": rows, "count": len(rows)}
+
+@api_router.get("/inventory/stock-card.xlsx")
+async def export_stock_card_excel(sku: str = Query("", description="Kosongkan untuk semua SKU"), user=Depends(current_user)):
+    """Export kartu stock ke XLSX. Kalau sku diisi: 1 sheet detail per pergerakan. Kalau kosong: 1 sheet ringkasan semua SKU."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    from io import BytesIO
+    wb = Workbook()
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill("solid", fgColor="A34B2B")
+    center = Alignment(horizontal="center", vertical="center")
+    if sku:
+        item = await db.inventory.find_one({"sku": sku}, {"_id": 0})
+        if not item:
+            raise HTTPException(404, "SKU tidak ditemukan")
+        # Build events same style as /history
+        events = []
+        for p in await db.purchases.find({"material_sku": sku}, {"_id": 0}).to_list(1000):
+            events.append({"date": p.get("created_at", ""), "type": "PO", "ref": p.get("po", ""), "in": p.get("quantity", 0), "out": 0, "note": f"PO {p.get('supplier','')} · {p.get('material','')}", "value_delta": p.get("total", 0)})
+        for pr in await db.production.find({}, {"_id": 0}).to_list(1000):
+            for line in (pr.get("material_breakdown") or []):
+                if line.get("material_sku") == sku:
+                    events.append({"date": pr.get("created_at", ""), "type": "PRODUKSI (pakai)", "ref": pr.get("batch", ""), "in": 0, "out": line.get("qty_used", 0), "note": f"Produksi {pr.get('product','')}", "value_delta": -line.get("line_cost", 0)})
+            if pr.get("output_sku") == sku:
+                events.append({"date": pr.get("created_at", ""), "type": "PRODUKSI (jadi)", "ref": pr.get("batch", ""), "in": pr.get("output_qty", 0), "out": 0, "note": f"Batch {pr.get('product','')}", "value_delta": pr.get("total_cost", 0)})
+        for s in await db.sales_transactions.find({"sku": sku}, {"_id": 0}).to_list(2000):
+            events.append({"date": s.get("created_at", ""), "type": "JUAL", "ref": s.get("invoice", ""), "in": 0, "out": s.get("quantity", 0), "note": f"{s.get('channel','')} · {s.get('customer','')}", "value_delta": -s.get("cogs", 0)})
+        for a in await db.stock_adjustments.find({"sku": sku}, {"_id": 0}).to_list(500):
+            d = a.get("delta", 0)
+            events.append({"date": a.get("adjusted_at", ""), "type": f"{a.get('kind','ADJUST').upper()} ({a.get('reason','')})", "ref": (a.get("id", "")[:8]).upper(), "in": d if d > 0 else 0, "out": -d if d < 0 else 0, "note": f"{a.get('note','')} · oleh {a.get('adjusted_by','')}", "value_delta": 0})
+        events.sort(key=lambda e: e.get("date") or "")
+        ws = wb.active
+        ws.title = f"Kartu-{sku[:20]}"
+        ws["A1"] = "LINIAR — Kartu Stock"
+        ws["A1"].font = Font(bold=True, size=16, color="A34B2B")
+        ws.merge_cells("A1:H1")
+        ws["A2"] = f"SKU: {sku} · {item.get('name','')} · {item.get('variant','')} · Satuan: {item.get('unit','pcs')}"
+        ws.merge_cells("A2:H2")
+        ws["A3"] = f"Dicetak: {datetime.now(timezone.utc).strftime('%d %b %Y %H:%M UTC')}"
+        ws.merge_cells("A3:H3")
+        headers = ["Tanggal", "Tipe", "Referensi", "Masuk", "Keluar", "Saldo", "Nilai Perubahan (Rp)", "Catatan"]
+        for i, h in enumerate(headers, 1):
+            c = ws.cell(row=5, column=i, value=h)
+            c.font = header_font
+            c.fill = header_fill
+            c.alignment = center
+        balance = 0
+        for i, e in enumerate(events, start=6):
+            balance += (e.get("in", 0) or 0) - (e.get("out", 0) or 0)
+            ws.cell(row=i, column=1, value=e.get("date", "")[:19].replace("T", " "))
+            ws.cell(row=i, column=2, value=e.get("type", ""))
+            ws.cell(row=i, column=3, value=e.get("ref", ""))
+            ws.cell(row=i, column=4, value=e.get("in", 0) or "")
+            ws.cell(row=i, column=5, value=e.get("out", 0) or "")
+            ws.cell(row=i, column=6, value=balance)
+            ws.cell(row=i, column=7, value=round(e.get("value_delta", 0), 2))
+            ws.cell(row=i, column=8, value=e.get("note", ""))
+        # Final row: current stock
+        final_row = len(events) + 7
+        ws.cell(row=final_row, column=1, value="STOK AKHIR").font = Font(bold=True)
+        ws.cell(row=final_row, column=6, value=item.get("stock", 0)).font = Font(bold=True)
+        ws.cell(row=final_row, column=7, value=item.get("value", 0)).font = Font(bold=True)
+        col_widths = [20, 22, 16, 10, 10, 12, 20, 40]
+        for i, w in enumerate(col_widths, 1):
+            ws.column_dimensions[chr(64 + i)].width = w
+    else:
+        # Summary all SKUs
+        items = await db.inventory.find({}, {"_id": 0}).sort("sku", 1).to_list(1000)
+        ws = wb.active
+        ws.title = "Ringkasan Stock"
+        ws["A1"] = "LINIAR — Ringkasan Kartu Stock"
+        ws["A1"].font = Font(bold=True, size=16, color="A34B2B")
+        ws.merge_cells("A1:H1")
+        ws["A2"] = f"Dicetak: {datetime.now(timezone.utc).strftime('%d %b %Y %H:%M UTC')} · {len(items)} SKU"
+        ws.merge_cells("A2:H2")
+        headers = ["SKU", "Nama", "Varian", "Tipe", "Stok", "Available", "Satuan", "Nilai (Rp)"]
+        for i, h in enumerate(headers, 1):
+            c = ws.cell(row=4, column=i, value=h)
+            c.font = header_font
+            c.fill = header_fill
+            c.alignment = center
+        for i, it in enumerate(items, start=5):
+            ws.cell(row=i, column=1, value=it.get("sku", ""))
+            ws.cell(row=i, column=2, value=it.get("name", ""))
+            ws.cell(row=i, column=3, value=it.get("variant", ""))
+            ws.cell(row=i, column=4, value=it.get("type", ""))
+            ws.cell(row=i, column=5, value=it.get("stock", 0))
+            ws.cell(row=i, column=6, value=it.get("available", 0))
+            ws.cell(row=i, column=7, value=it.get("unit", "pcs"))
+            ws.cell(row=i, column=8, value=round(it.get("value", 0), 2))
+        for i, w in enumerate([18, 30, 20, 14, 10, 12, 10, 18], 1):
+            ws.column_dimensions[chr(64 + i)].width = w
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = f"kartu-stock-{sku or 'semua'}-{datetime.now().strftime('%Y%m%d-%H%M')}.xlsx"
+    return Response(content=buf.getvalue(), media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
 # ---------- Settings (POS margin) ----------
 SETTINGS_KEY = "pos_config"
 DEFAULT_POS_SETTINGS = {"default_margin_pct": 60, "round_to": 1000, "margin_by_type": {}}
@@ -852,6 +1003,17 @@ async def _opex_total(start_iso, end_iso, channel_all: bool):
     rows = await db.operating_expenses.find({}, {"_id": 0}).to_list(2000)
     return sum(r.get("amount", 0) for r in rows if _period_in_range(r.get("period", ""), start_iso, end_iso))
 
+async def _opex_breakdown(start_iso, end_iso, channel_all: bool):
+    if not channel_all:
+        return []
+    rows = await db.operating_expenses.find({}, {"_id": 0}).to_list(2000)
+    agg = {}
+    for r in rows:
+        if _period_in_range(r.get("period", ""), start_iso, end_iso):
+            cat = r.get("category") or "Lainnya"
+            agg[cat] = agg.get(cat, 0) + r.get("amount", 0)
+    return [{"category": c, "amount": round(v, 2)} for c, v in sorted(agg.items(), key=lambda x: -x[1])]
+
 @api_router.get("/opex")
 async def list_opex(user=Depends(current_user)):
     return await db.operating_expenses.find({}, {"_id": 0}).sort("period", -1).to_list(500)
@@ -923,9 +1085,11 @@ def _asset_derived(asset, at_iso=None):
         purchase = _date.fromisoformat(asset["purchase_date"])
     except Exception:
         return {"monthly_dep": 0, "elapsed_months": 0, "accumulated_dep": 0, "book_value": asset.get("purchase_cost", 0)}
-    life = max(1, int(asset.get("useful_life_months", 1)))
+    life = int(asset.get("useful_life_months", 0) or 0)
     salvage = float(asset.get("salvage_value", 0))
     cost = float(asset.get("purchase_cost", 0))
+    if life <= 0:  # non-depreciable "Aset Lainnya"
+        return {"monthly_dep": 0, "elapsed_months": 0, "accumulated_dep": 0, "book_value": cost}
     monthly = (cost - salvage) / life
     if at < purchase:
         elapsed = 0
@@ -953,7 +1117,9 @@ def _dep_in_range(assets, start_iso, end_iso):
             purchase = _date.fromisoformat(a.get("purchase_date", ""))
         except Exception:
             continue
-        life = max(1, int(a.get("useful_life_months", 1)))
+        life = int(a.get("useful_life_months", 0) or 0)
+        if life <= 0:  # non-depreciable asset
+            continue
         salvage = float(a.get("salvage_value", 0))
         cost = float(a.get("purchase_cost", 0))
         monthly = (cost - salvage) / life
@@ -984,8 +1150,8 @@ async def create_asset(input: AssetInput, user=Depends(admin_only)):
         raise HTTPException(422, "Tanggal beli harus format YYYY-MM-DD")
     if input.purchase_cost <= 0:
         raise HTTPException(422, "Harga perolehan harus positif")
-    if input.useful_life_months <= 0:
-        raise HTTPException(422, "Masa manfaat harus > 0 bulan")
+    if input.useful_life_months < 0:
+        raise HTTPException(422, "Masa manfaat tidak boleh negatif. Isi 0 untuk aset tidak disusutkan (tanah, deposit).")
     if input.salvage_value < 0 or input.salvage_value >= input.purchase_cost:
         raise HTTPException(422, "Nilai sisa harus 0 sampai < harga perolehan")
     doc = {"id": str(uuid.uuid4()), **input.model_dump(), "status": "aktif", "created_at": datetime.now(timezone.utc).isoformat()}
@@ -1264,6 +1430,7 @@ async def reports(channel: str = Query("Semua"), granularity: str = Query("all")
     purchases = await db.purchases.find(range_q(start, end), {"_id": 0}).to_list(2000)
     production = await db.production.find(range_q(start, end), {"_id": 0}).to_list(2000)
     opex = await _opex_total(start, end, channel == "Semua")
+    opex_breakdown = await _opex_breakdown(start, end, channel == "Semua")
     all_assets_for_dep = await db.fixed_assets.find({}, {"_id": 0}).to_list(500)
     current_dep = _dep_in_range(all_assets_for_dep, start, end) if channel == "Semua" else 0
     current = _aggregate(sales, purchases, production, opex)
@@ -1352,7 +1519,7 @@ async def reports(channel: str = Query("Semua"), granularity: str = Query("all")
     deltas = None
     if previous:
         deltas = {"revenue_pct": _pct(current["revenue"], previous["revenue"]), "net_profit_pct": _pct(current["net_profit"], previous["net_profit"]), "cash_net_pct": _pct(current["cash_net"], previous["cash_net"])}
-    return {"period": label, "previous_period": p_label if previous else None, "granularity": granularity, "channel": channel, "transaction_count": current["transaction_count"], "income": {"revenue": current["revenue"], "cogs": current["cogs"], "gross_profit": current["gross_profit"], "operating_expense": current["operating_expense"], "depreciation": current["depreciation"], "net_profit": current["net_profit"]}, "balance": {"assets": total_assets, "liabilities": total_liabilities, "equity": total_assets - total_liabilities, "detail": balance_detail}, "cash": {"in": current["cash_in"], "out": current["cash_out"], "net": current["cash_net"]}, "previous": previous, "deltas": deltas, "channel_summary": channel_summary}
+    return {"period": label, "previous_period": p_label if previous else None, "granularity": granularity, "channel": channel, "transaction_count": current["transaction_count"], "income": {"revenue": current["revenue"], "cogs": current["cogs"], "gross_profit": current["gross_profit"], "operating_expense": current["operating_expense"], "opex_breakdown": opex_breakdown, "depreciation": current["depreciation"], "net_profit": current["net_profit"]}, "balance": {"assets": total_assets, "liabilities": total_liabilities, "equity": total_assets - total_liabilities, "detail": balance_detail}, "cash": {"in": current["cash_in"], "out": current["cash_out"], "net": current["cash_net"]}, "previous": previous, "deltas": deltas, "channel_summary": channel_summary}
 
 # Add your routes to the router instead of directly to app
 @api_router.get("/")
