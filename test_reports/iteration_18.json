@@ -1,0 +1,21 @@
+{
+  "summary": "Iteration 18 — Piutang & Utang (Receivables & Payables) fully tested end-to-end. Backend: 27/27 pytest cases pass (create for all 4 types, validation 422s, filters, payments mirroring to cash_movements with correct direction/category, 409/404/409 conflict handling, balance-detail extension, /reports balance sheet extended and balanced). Frontend: admin can open /piutang-utang, all 4 tabs render, summary metrics visible, create form works, pay modal submits payment (mirrors to Kas/Bank), and tab switching updates placeholders.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": [{"screen": "Piutang & Utang form", "issues": ["Uses browser's default date picker (mm/dd/yyyy) — consistent with other pages but not localized to id-ID. Not blocking."]}]},
+  "test_report_links": ["/app/backend/tests/test_iter18_receivables_payables.py", "/app/test_reports/pytest/iter18_results.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is 1225 lines — should be split into modules (auth, rp, cash, reports, balance_detail, assets) for maintainability.",
+    "RP payment mirror creates cash_movement with category NOT in CASH_MOVEMENT_CATEGORIES; by design, but consider adding these to the set for filter symmetry or documenting explicitly.",
+    "_rp_derived recomputes on every list call — fine for small data, but consider stored aggregates or MongoDB $expr aggregation as data grows.",
+    "RP delete blocks when paid_total > 0 — user must manually delete linked cash_movement (linked_rp_id) to unwind, which is friction. Consider a cascade or admin-only force option.",
+    "balance-detail for piutang/utang uses direction 'in' for the head entry and 'out' for payments. That's a clever convention but semantically the head of utang is a liability increase (not an 'in' asset). Works because saldo == remaining, but a comment would help future readers."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter18_receivables_payables.py"],
+  "success_rate": {"backend": "100% (27/27)", "frontend": "100% (all UI flows validated)"},
+  "test_credentials": "admin@liniar.id / Liniar123!, staff@liniar.id / Staff123! (from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Test file creates TEST_<type> records for 4 types then cleans up (partial-paid ones are left as by-design 409). UI test creates one UI_Test_<ts> record with Rp 2.5jt piutang_usaha + Rp 500k partial payment.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_iter18_receivables_payables.py has class-scoped shared IDs, so must run without xdist parallelism: pytest -o addopts=\"\". All other iterations' tests still valid; no regression in existing endpoints observed."
+}

@@ -96,6 +96,21 @@ class AssetInput(BaseModel):
     useful_life_months: int
     salvage_value: float = 0
 
+class ReceivablePayableInput(BaseModel):
+    type: str  # piutang_usaha | piutang_lainnya | utang_usaha | utang_lainnya
+    date: str  # YYYY-MM-DD
+    counterparty: str
+    amount: float
+    due_date: str = ""  # YYYY-MM-DD optional
+    reference: str = ""
+    note: str = ""
+
+class RPPaymentInput(BaseModel):
+    date: str  # YYYY-MM-DD
+    amount: float
+    account: str = "bank"  # kas | bank
+    note: str = ""
+
 def public_user(user):
     return {"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"]}
 
@@ -347,9 +362,13 @@ async def reports_detail(kind: str = Query(...), channel: str = Query("Semua"), 
 BALANCE_KINDS = {
     "kas": "Kas",
     "bank": "Bank",
+    "piutang_usaha": "Piutang Usaha",
+    "piutang_lainnya": "Piutang Lainnya",
     "persediaan_bahan": "Persediaan Bahan Baku",
     "persediaan_barang_jadi": "Persediaan Barang Jadi",
     "aset_tetap": "Aset Tetap",
+    "utang_usaha": "Utang Usaha",
+    "utang_lainnya": "Utang Lainnya",
     "utang_pinjaman": "Utang Pinjaman (Jangka Panjang)",
     "modal_disetor": "Modal Disetor",
     "laba_ditahan": "Laba Ditahan",
@@ -434,6 +453,15 @@ async def balance_detail(kind: str = Query(...), user=Depends(admin_only)):
             d = _asset_derived(a)
             if d["accumulated_dep"] > 0:
                 rows.append({"date": iso, "ref": (a.get("id", "")[:8]).upper(), "description": f"Akumulasi penyusutan · {a.get('name')} · {d['elapsed_months']}/{a.get('useful_life_months')} bln", "direction": "out", "amount": d["accumulated_dep"]})
+
+    elif kind in ("piutang_usaha", "piutang_lainnya", "utang_usaha", "utang_lainnya"):
+        rp_rows = await db.receivables_payables.find({"type": kind}, {"_id": 0}).to_list(2000)
+        for rp in rp_rows:
+            iso = rp.get("created_at") or f"{rp.get('date','2020-01-01')}T00:00:00+00:00"
+            rows.append({"date": iso, "ref": rp.get("reference") or (rp.get("id", "")[:8]).upper(), "description": f"{rp.get('counterparty','')}{' · jatuh tempo ' + rp.get('due_date') if rp.get('due_date') else ''}{' · ' + rp.get('note') if rp.get('note') else ''}", "direction": "in", "amount": rp.get("amount", 0)})
+            for pay in (rp.get("payments") or []):
+                pay_iso = pay.get("created_at") or f"{pay.get('date','2020-01-01')}T00:00:00+00:00"
+                rows.append({"date": pay_iso, "ref": (pay.get("id", "")[:8]).upper(), "description": f"Pelunasan · {rp.get('counterparty','')} via {pay.get('account','bank')}{' · ' + pay.get('note') if pay.get('note') else ''}", "direction": "out", "amount": pay.get("amount", 0)})
 
     rows.sort(key=lambda r: r.get("date") or "", reverse=True)
     total_in = sum(r["amount"] for r in rows if r["direction"] == "in")
@@ -785,6 +813,113 @@ async def delete_asset(asset_id: str, user=Depends(admin_only)):
     return {"deleted": asset_id}
 
 
+# ---------- Piutang & Utang (Receivables & Payables) ----------
+
+RP_TYPES = {"piutang_usaha", "piutang_lainnya", "utang_usaha", "utang_lainnya"}
+RP_LABELS = {"piutang_usaha": "Piutang Usaha", "piutang_lainnya": "Piutang Lainnya", "utang_usaha": "Utang Usaha", "utang_lainnya": "Utang Lainnya"}
+
+def _rp_derived(rp):
+    """Compute paid_total, remaining, status from stored payments."""
+    payments = rp.get("payments", []) or []
+    paid = sum(p.get("amount", 0) for p in payments)
+    amount = float(rp.get("amount", 0))
+    remaining = round(max(0, amount - paid), 2)
+    if paid <= 0:
+        status = "outstanding"
+    elif remaining <= 0.01:
+        status = "lunas"
+    else:
+        status = "partial"
+    return {"paid_total": round(paid, 2), "remaining": remaining, "status": status}
+
+@api_router.get("/receivables-payables")
+async def list_rp(type: str = Query(""), status: str = Query(""), user=Depends(admin_only)):
+    q = {}
+    if type:
+        if type not in RP_TYPES:
+            raise HTTPException(422, f"type tidak valid. Pilih: {', '.join(sorted(RP_TYPES))}")
+        q["type"] = type
+    rows = await db.receivables_payables.find(q, {"_id": 0}).sort("date", -1).to_list(1000)
+    out = []
+    for r in rows:
+        d = _rp_derived(r)
+        item = {**r, **d, "label": RP_LABELS.get(r.get("type"), r.get("type"))}
+        if status and d["status"] != status:
+            continue
+        out.append(item)
+    total_amount = sum(r["amount"] for r in out)
+    total_paid = sum(r["paid_total"] for r in out)
+    total_remaining = sum(r["remaining"] for r in out)
+    return {"items": out, "count": len(out), "total_amount": total_amount, "total_paid": total_paid, "total_remaining": total_remaining}
+
+@api_router.post("/receivables-payables")
+async def create_rp(input: ReceivablePayableInput, user=Depends(admin_only)):
+    import re
+    if input.type not in RP_TYPES:
+        raise HTTPException(422, f"type tidak valid. Pilih: {', '.join(sorted(RP_TYPES))}")
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", input.date):
+        raise HTTPException(422, "Tanggal harus format YYYY-MM-DD")
+    if input.due_date and not re.match(r"^\d{4}-\d{2}-\d{2}$", input.due_date):
+        raise HTTPException(422, "Tanggal jatuh tempo harus format YYYY-MM-DD")
+    if input.amount <= 0:
+        raise HTTPException(422, "Nominal harus positif")
+    if not input.counterparty.strip():
+        raise HTTPException(422, "Nama pihak lawan wajib diisi")
+    doc = {"id": str(uuid.uuid4()), **input.model_dump(), "payments": [], "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.receivables_payables.insert_one(doc)
+    await log_activity(user, "create", "receivable_payable", doc["id"], f"{RP_LABELS[input.type]} · {input.counterparty} · {money_str(input.amount)}", {"type": input.type, "amount": input.amount, "counterparty": input.counterparty})
+    doc.pop("_id", None)
+    return {**doc, **_rp_derived(doc), "label": RP_LABELS[input.type]}
+
+@api_router.post("/receivables-payables/{rp_id}/payments")
+async def add_rp_payment(rp_id: str, input: RPPaymentInput, user=Depends(admin_only)):
+    import re
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", input.date):
+        raise HTTPException(422, "Tanggal harus format YYYY-MM-DD")
+    if input.amount <= 0:
+        raise HTTPException(422, "Nominal harus positif")
+    if input.account not in {"kas", "bank"}:
+        raise HTTPException(422, "Akun harus kas atau bank")
+    rp = await db.receivables_payables.find_one({"id": rp_id}, {"_id": 0})
+    if not rp:
+        raise HTTPException(404, "Piutang/Utang tidak ditemukan")
+    d = _rp_derived(rp)
+    if input.amount > d["remaining"] + 0.01:
+        raise HTTPException(409, f"Nominal melebihi sisa saldo (sisa Rp {int(d['remaining']):,})")
+    payment = {"id": str(uuid.uuid4()), **input.model_dump(), "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.receivables_payables.update_one({"id": rp_id}, {"$push": {"payments": payment}})
+    # Mirror to cash_movements so kas/bank saldo bergerak otomatis
+    is_piutang = rp["type"].startswith("piutang")
+    cm_direction = "in" if is_piutang else "out"
+    cm_category = "pelunasan_piutang" if is_piutang else "pelunasan_utang"
+    cm_doc = {"id": str(uuid.uuid4()), "date": input.date, "account": input.account, "direction": cm_direction, "category": cm_category, "amount": input.amount, "note": f"{RP_LABELS[rp['type']]} · {rp.get('counterparty','')}{' · '+input.note if input.note else ''}", "linked_rp_id": rp_id, "linked_payment_id": payment["id"], "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.cash_movements.insert_one(cm_doc)
+    await log_activity(user, "payment", "receivable_payable", rp_id, f"Bayar {RP_LABELS[rp['type']]} · {rp.get('counterparty')} · {money_str(input.amount)} via {input.account}", {"payment_id": payment["id"], "amount": input.amount, "account": input.account})
+    fresh = await db.receivables_payables.find_one({"id": rp_id}, {"_id": 0})
+    return {**fresh, **_rp_derived(fresh), "label": RP_LABELS[fresh["type"]]}
+
+@api_router.delete("/receivables-payables/{rp_id}")
+async def delete_rp(rp_id: str, user=Depends(admin_only)):
+    existing = await db.receivables_payables.find_one({"id": rp_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(404, "Piutang/Utang tidak ditemukan")
+    if _rp_derived(existing)["paid_total"] > 0:
+        raise HTTPException(409, "Tidak bisa hapus. Sudah ada pelunasan tercatat. Hapus manual dulu dari Kas/Bank kalau perlu.")
+    await db.receivables_payables.delete_one({"id": rp_id})
+    await log_activity(user, "delete", "receivable_payable", rp_id, f"{RP_LABELS.get(existing.get('type'), existing.get('type'))} · {existing.get('counterparty')} · {money_str(existing.get('amount', 0))} dihapus")
+    return {"deleted": rp_id}
+
+async def _rp_totals_by_type():
+    """Return {type: {outstanding: remaining_total}} for balance sheet."""
+    rows = await db.receivables_payables.find({}, {"_id": 0}).to_list(2000)
+    totals = {"piutang_usaha": 0.0, "piutang_lainnya": 0.0, "utang_usaha": 0.0, "utang_lainnya": 0.0}
+    for r in rows:
+        d = _rp_derived(r)
+        t = r.get("type")
+        if t in totals:
+            totals[t] += d["remaining"]
+    return {k: round(v, 2) for k, v in totals.items()}
+
 
 @api_router.get("/activity-logs")
 async def activity_logs(action: str = Query(""), entity: str = Query(""), user_email: str = Query(""), limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0), user=Depends(admin_only)):
@@ -953,14 +1088,20 @@ async def reports(channel: str = Query("Semua"), granularity: str = Query("all")
         total_akumulasi_penyusutan += d["accumulated_dep"]
         fixed_asset_items.append({"id": a.get("id"), "name": a.get("name"), "category": a.get("category"), "purchase_cost": a.get("purchase_cost", 0), "accumulated_dep": d["accumulated_dep"], "book_value": d["book_value"]})
     total_nilai_buku_aset = total_perolehan - total_akumulasi_penyusutan
-    # Aset lancar total
-    total_aset_lancar = max(kas, 0) + max(bank, 0) + persediaan_bahan + persediaan_barang_jadi
+    # Aset lancar total (kas + bank + persediaan + piutang)
+    rp_totals = await _rp_totals_by_type()
+    piutang_usaha = rp_totals["piutang_usaha"]
+    piutang_lainnya = rp_totals["piutang_lainnya"]
+    utang_usaha = rp_totals["utang_usaha"]
+    utang_lainnya = rp_totals["utang_lainnya"]
+    total_aset_lancar = max(kas, 0) + max(bank, 0) + persediaan_bahan + persediaan_barang_jadi + piutang_usaha + piutang_lainnya
     total_assets = total_aset_lancar + total_nilai_buku_aset
     # Liabilities from cash_movements
     utang_pinjaman_masuk = sum(m["amount"] for m in all_cm if m.get("category") == "pinjaman_diterima")
     utang_pinjaman_bayar = sum(m["amount"] for m in all_cm if m.get("category") == "bayar_cicilan_pinjaman")
     utang_pinjaman = max(0, utang_pinjaman_masuk - utang_pinjaman_bayar)
-    total_liabilities = utang_pinjaman
+    total_liab_jangka_pendek = utang_usaha + utang_lainnya
+    total_liabilities = utang_pinjaman + total_liab_jangka_pendek
     # Equity from owner
     modal_masuk = sum(m["amount"] for m in all_cm if m.get("category") == "modal_masuk")
     tarik_pribadi = sum(m["amount"] for m in all_cm if m.get("category") == "tarik_pribadi")
@@ -968,13 +1109,13 @@ async def reports(channel: str = Query("Semua"), granularity: str = Query("all")
     laba_ditahan = total_assets - total_liabilities - modal_disetor
     balance_detail = {
         "assets": {
-            "lancar": {"kas": kas, "bank": bank, "kas_setara_total": max(kas, 0) + max(bank, 0), "persediaan_bahan": persediaan_bahan, "persediaan_barang_jadi": persediaan_barang_jadi, "persediaan_total": persediaan_bahan + persediaan_barang_jadi, "total": total_aset_lancar},
+            "lancar": {"kas": kas, "bank": bank, "kas_setara_total": max(kas, 0) + max(bank, 0), "piutang_usaha": piutang_usaha, "piutang_lainnya": piutang_lainnya, "piutang_total": piutang_usaha + piutang_lainnya, "persediaan_bahan": persediaan_bahan, "persediaan_barang_jadi": persediaan_barang_jadi, "persediaan_total": persediaan_bahan + persediaan_barang_jadi, "total": total_aset_lancar},
             "tetap": {"items": fixed_asset_items, "total_perolehan": total_perolehan, "total_akumulasi_penyusutan": total_akumulasi_penyusutan, "total_nilai_buku": total_nilai_buku_aset},
             "tidak_lancar_total": total_nilai_buku_aset,
             "total": total_assets,
         },
         "liabilities": {
-            "jangka_pendek": {"total": 0},
+            "jangka_pendek": {"utang_usaha": utang_usaha, "utang_lainnya": utang_lainnya, "total": total_liab_jangka_pendek},
             "jangka_panjang": {"utang_pinjaman": utang_pinjaman, "total": utang_pinjaman},
             "utang_pinjaman": utang_pinjaman,
             "total": total_liabilities,
