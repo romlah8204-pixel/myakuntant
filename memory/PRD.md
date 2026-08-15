@@ -47,6 +47,13 @@ Aplikasi untuk usaha manufaktur fashion: pembelian bahan baku, produksi, persedi
   - **Role Granular**: 5 role baru + backward compat (admin/staff). Roles: `admin`, `owner`, `admin_keuangan`, `manajer_produksi`, `kasir`, `staf_gudang`, `staff` (legacy). Menu di sidebar auto-filter berdasarkan role. Backend: `admin_only` sekarang menerima admin+owner. Deps: `finance_only`, `cashier_role`. 4 demo user seed: keuangan@liniar.id, produksi@liniar.id, kasir@liniar.id, gudang@liniar.id. Terverifikasi frontend menu match EXACT per role.
   - **CSV Import** (`/import-csv`, admin/keuangan): upload CSV → POST /api/sales/import-csv?channel=X. Header case-insensitive dengan alias (sku, quantity/qty/jumlah, unit_price/harga/price, customer/buyer, order_ref/invoice). Skipped rows dijelaskan alasannya. Tombol download template CSV disediakan.
   - **Alokasi Stok per Kanal**: tombol "Alokasi" di setiap barang jadi di Persediaan → modal dengan input qty untuk 6 channel (Shopee/Tokopedia/TikTok/Offline/Bazar/POS). Over-allocation ditolak (409). Endpoint POST /api/inventory/{sku}/allocate. Backend 28/28 pytest PASS, frontend full-flow verified via testing_agent iter19.
+- **POS Auto-Cash + Piutang + Donut + Sinkron Alokasi (Feb 15, 2026)**:
+  - **POS Auto Cash Movement**: penjualan POS dengan payment_method tunai/qris otomatis membuat cash_movement account=kas category=pos_penjualan (linked_sale_id); kartu/transfer → cash_movement account=bank; bayar_nanti → otomatis buat piutang_usaha (linked_receivable_id, sale.status="Piutang", counterparty=customer).
+  - Balance sheet **EXCLUDES POS+payment_method sales** dari op_cash_in (baik di /api/reports maupun /api/balance-detail?kind=kas) untuk cegah double counting. reports.kas === drill.kas persis.
+  - **POS bayar_nanti validation**: wajib isi nama pelanggan (bukan "Walk-in"/"Pelanggan umum"/kosong) → 422.
+  - **Donut Metode Pembayaran** di Dashboard: `GET /api/payment-methods-summary?months=6` mengembalikan breakdown per bulan + donut bulan terkini. Legend menampilkan Tunai/QRIS/Kartu/Transfer/Bayar Nanti dengan warna khusus, tren stacked-bar 6 bulan.
+  - **Sinkron Alokasi ↔ Siap Dijual**: Filter kanal di halaman Siap Dijual sekarang membaca `channel_stock` — SKU yang tidak dialokasikan ke channel tersebut disembunyikan. Filter "Semua" menampilkan chips per-channel qty (`Shopee · 1`, `Tokopedia · 1`, `bebas · 2`).
+  - Backend 23/23 pytest PASS iter21 (fix balance-detail kas double count), frontend semua UI flow diverifikasi via screenshot.
 - Backend testing 42/42 PASS iter16+iter17 (accounting + depreciation)
 - Backend testing 38/38 PASS iter12 (setelah fix bug None-date sort di cash_out drill-down)
 

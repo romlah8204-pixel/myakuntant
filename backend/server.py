@@ -414,7 +414,10 @@ async def balance_detail(kind: str = Query(...), user=Depends(admin_only)):
 
     if kind == "kas":
         # Kas = operasional (semua penjualan cash-in − PO/produksi/opex cash-out) + cash_movements akun kas
+        # EXCLUDE POS+payment_method sales karena sudah auto-create cash_movement (cegah double count) — konsisten dengan /api/reports op_cash_in
         for s in await db.sales_transactions.find({}, {"_id": 0}).to_list(5000):
+            if s.get("channel") == "POS" and s.get("payment_method"):
+                continue
             rows.append({"date": s.get("created_at") or "", "ref": s.get("invoice"), "description": f"Penjualan {s.get('channel')} · {s.get('sku')} {s.get('quantity')} pcs · {s.get('customer')}", "direction": "in", "amount": s.get("revenue", 0)})
         for p in await db.purchases.find({}, {"_id": 0}).to_list(5000):
             rows.append({"date": p.get("created_at") or "", "ref": p.get("po"), "description": f"PO bahan · {p.get('supplier')} · {p.get('material')}", "direction": "out", "amount": p.get("total", 0)})
@@ -555,6 +558,12 @@ async def create_sale(input: SaleInput, user=Depends(current_user)):
         raise HTTPException(422, "Kanal penjualan tidak valid")
     if input.quantity < 1 or input.unit_price < 0:
         raise HTTPException(422, "Jumlah dan harga harus valid")
+    # POS payment method validation: tunai/qris/kartu/transfer masuk kas/bank; bayar_nanti → piutang
+    valid_pm = {"tunai", "qris", "kartu", "transfer", "bayar_nanti", ""}
+    if input.payment_method and input.payment_method not in valid_pm:
+        raise HTTPException(422, "Metode pembayaran tidak valid")
+    if input.channel == "POS" and input.payment_method == "bayar_nanti" and (not input.customer or input.customer.strip().lower() in {"", "walk-in", "pelanggan umum"}):
+        raise HTTPException(422, "Untuk bayar nanti wajib isi nama pelanggan yang jelas")
     item = await db.inventory.find_one({"sku": input.sku}, {"_id": 0})
     if not item:
         raise HTTPException(404, "SKU tidak ditemukan di persediaan")
@@ -563,12 +572,27 @@ async def create_sale(input: SaleInput, user=Depends(current_user)):
     unit_cost = item.get("value", 0) / max(item.get("stock", 1), 1)
     revenue = input.quantity * input.unit_price
     cogs = input.quantity * unit_cost
-    doc = {"id": str(uuid.uuid4()), "invoice": f"INV-{datetime.now().strftime('%y%m%d')}-{str(uuid.uuid4())[:4].upper()}", **input.model_dump(), "revenue": revenue, "cogs": round(cogs, 2), "gross_profit": round(revenue - cogs, 2), "created_at": datetime.now(timezone.utc).isoformat(), "status": "Lunas"}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    doc = {"id": str(uuid.uuid4()), "invoice": f"INV-{datetime.now().strftime('%y%m%d')}-{str(uuid.uuid4())[:4].upper()}", **input.model_dump(), "revenue": revenue, "cogs": round(cogs, 2), "gross_profit": round(revenue - cogs, 2), "created_at": now_iso, "status": "Lunas"}
     updated = await db.inventory.update_one({"sku": input.sku, "available": {"$gte": input.quantity}}, {"$inc": {"stock": -input.quantity, "available": -input.quantity}})
     if updated.modified_count != 1:
         raise HTTPException(409, "Stok berubah. Muat ulang persediaan lalu coba lagi")
+    # POS auto-linkage: cash_movement (tunai/qris→kas, kartu/transfer→bank) OR piutang_usaha (bayar_nanti)
+    if input.channel == "POS" and input.payment_method:
+        today_ymd = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        if input.payment_method == "bayar_nanti":
+            rp_doc = {"id": str(uuid.uuid4()), "type": "piutang_usaha", "date": today_ymd, "counterparty": input.customer, "amount": revenue, "due_date": "", "reference": doc["invoice"], "note": f"POS bayar nanti · {input.sku} · {input.quantity} pcs", "payments": [], "linked_sale_id": doc["id"], "created_at": now_iso}
+            await db.receivables_payables.insert_one(rp_doc)
+            doc["status"] = "Piutang"
+            doc["linked_receivable_id"] = rp_doc["id"]
+        else:
+            account_map = {"tunai": "kas", "qris": "kas", "kartu": "bank", "transfer": "bank"}
+            acct = account_map.get(input.payment_method, "kas")
+            cm_doc = {"id": str(uuid.uuid4()), "date": today_ymd, "account": acct, "direction": "in", "category": "pos_penjualan", "amount": revenue, "note": f"POS {input.payment_method.upper()} · {doc['invoice']} · {input.customer}", "linked_sale_id": doc["id"], "created_at": now_iso}
+            await db.cash_movements.insert_one(cm_doc)
+            doc["linked_cash_movement_id"] = cm_doc["id"]
     await db.sales_transactions.insert_one(doc)
-    await log_activity(user, "create", "sale", doc["id"], f"Penjualan {doc['invoice']} · {input.channel} · {input.quantity} {item.get('unit','pcs')} {input.sku} · {money_str(revenue)}", {"channel": input.channel, "sku": input.sku, "quantity": input.quantity, "revenue": revenue})
+    await log_activity(user, "create", "sale", doc["id"], f"Penjualan {doc['invoice']} · {input.channel} · {input.quantity} {item.get('unit','pcs')} {input.sku} · {money_str(revenue)}" + (f" · {input.payment_method.upper()}" if input.payment_method else ""), {"channel": input.channel, "sku": input.sku, "quantity": input.quantity, "revenue": revenue, "payment_method": input.payment_method})
     doc.pop("_id", None)
     return doc
 
@@ -1129,6 +1153,33 @@ async def sales_by_channel(user=Depends(current_user)):
         rows.append({"label": id_month[m - 1], "year": y, "month": m, "channels": by_ch, "total": sum(by_ch.values())})
     return {"months": rows, "channels": channels}
 
+@api_router.get("/payment-methods-summary")
+async def payment_methods_summary(months: int = Query(6, ge=1, le=24), user=Depends(current_user)):
+    """Breakdown of sales by payment_method for the last N months + current month donut."""
+    id_month = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"]
+    method_labels = {"tunai": "Tunai", "qris": "QRIS", "kartu": "Kartu", "transfer": "Transfer", "bayar_nanti": "Bayar Nanti", "": "Tanpa Metode"}
+    methods = ["tunai", "qris", "kartu", "transfer", "bayar_nanti", ""]
+    now = datetime.now(timezone.utc)
+    period_months = []
+    for i in range(months - 1, -1, -1):
+        y, m = now.year, now.month - i
+        while m <= 0:
+            m += 12; y -= 1
+        period_months.append((y, m))
+    rows = []
+    for y, m in period_months:
+        start = datetime(y, m, 1, tzinfo=timezone.utc).isoformat()
+        end = datetime(y + (m // 12), (m % 12) + 1, 1, tzinfo=timezone.utc).isoformat()
+        sales = await db.sales_transactions.find({"created_at": {"$gte": start, "$lt": end}}, {"_id": 0}).to_list(3000)
+        by_method = {mm: 0 for mm in methods}
+        for s in sales:
+            pm = s.get("payment_method") or ""
+            by_method[pm] = by_method.get(pm, 0) + s.get("revenue", 0)
+        rows.append({"label": id_month[m - 1], "year": y, "month": m, "methods": by_method, "total": sum(by_method.values())})
+    # Donut = latest month only
+    donut = rows[-1] if rows else {"methods": {}, "total": 0}
+    return {"months": rows, "methods": methods, "labels": method_labels, "donut": donut}
+
 @api_router.get("/reports")
 async def reports(channel: str = Query("Semua"), granularity: str = Query("all"), period: str = Query(""), user=Depends(admin_only)):
     valid_channels = {"Semua", "Offline", "Bazar", "Shopee", "Tokopedia", "TikTok", "POS"}
@@ -1186,7 +1237,8 @@ async def reports(channel: str = Query("Semua"), granularity: str = Query("all")
     all_purchases = await db.purchases.find({}, {"_id": 0}).to_list(5000)
     all_production = await db.production.find({}, {"_id": 0}).to_list(5000)
     all_opex = await db.operating_expenses.find({}, {"_id": 0}).to_list(2000)
-    op_cash_in = sum(s.get("revenue", 0) for s in all_sales)
+    # POS sales dengan payment_method sudah auto-create cash_movement/piutang, jadi exclude dari op_cash_in untuk cegah double counting
+    op_cash_in = sum(s.get("revenue", 0) for s in all_sales if not (s.get("channel") == "POS" and s.get("payment_method")))
     op_cash_out = sum(p.get("total", 0) for p in all_purchases) + sum(pr.get("total_cost", 0) for pr in all_production) + sum(o.get("amount", 0) for o in all_opex)
     kas = op_cash_in - op_cash_out + kas_manual_in - kas_manual_out
     bank = bank_in - bank_out

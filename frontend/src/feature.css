@@ -79,7 +79,7 @@
 .pos-product-card:hover:not(.disabled){transform:translateY(-2px);border-color:var(--terra);box-shadow:0 6px 16px rgba(160,75,43,.15)}
 .pos-product-card.disabled{opacity:.4;cursor:not-allowed;filter:grayscale(1)}
 .pos-cart{background:var(--surface);border:1px solid var(--terra);padding:20px;height:fit-content;position:sticky;top:20px}
-.pos-methods{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pos-methods{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
 .pos-method-btn{display:flex;flex-direction:column;align-items:center;padding:12px 8px;background:var(--surface);border:1px solid var(--line);cursor:pointer;transition:all .15s;font-family:inherit;color:inherit}
 .pos-method-btn:hover{border-color:var(--terra)}
 .pos-method-btn.active{background:var(--terra);color:#fffdf8;border-color:var(--terra)}

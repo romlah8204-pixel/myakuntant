@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 20 backend + frontend testing for POS payment_method auto-linkage, balance sheet double-counting prevention, and payment-methods-summary endpoint. 22/22 backend pytest cases PASS (serial run). Frontend Dashboard donut, POS 5 methods, and Siap Dijual channel filter with per-channel chips all verified. One real bug found: /api/balance-detail?kind=kas double-counts POS+payment_method sales (adds both the raw sale row AND the cash_movement row), causing kas saldo in drilldown to mismatch /api/reports kas by ~Rp 8.815.000 on current dataset.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/balance-detail?kind=kas", "issue": "Double-counts POS sales that have payment_method: raw sale entries (line 417-418 in server.py) are added to kas rows AND the auto-created cash_movement rows (line 426-428) are also added. Result: balance-detail saldo is HIGHER than /api/reports kas by the sum of POS+payment_method sale revenue. On current dataset mismatch = Rp 8.815.000 (saldo -701.502.750 vs reports kas -710.317.750). Fix: in balance_detail kind=='kas', exclude sales where channel=='POS' AND payment_method truthy — mirror the exclusion already applied in /api/reports op_cash_in (server.py line 1238)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter20_pos_payment_methods.py",
+    "/app/test_reports/pytest/iter20.xml"
+  ],
+  "action_items": [
+    "Fix balance-detail kas double-counting for POS+payment_method sales (exclude them like /api/reports does)."
+  ],
+  "critical_code_review_comments": [
+    "Kas drilldown (/api/balance-detail?kind=kas) is not consistent with /api/reports kas balance — POS+payment_method sales are counted twice (as sale row + cash_movement row).",
+    "POS auto-linkage code (server.py 578-590) modifies inventory BEFORE inserting sales_transactions but inserts cash_movement/receivable BEFORE the sales_transaction insert. If cash_movement insert succeeds but sales_transactions insert then fails (network glitch), orphan cash_movement remains with linked_sale_id pointing to a non-existent sale. Consider insert order: sale first, then linkage doc, wrapped in try/except with compensating delete on failure — or a Mongo transaction session.",
+    "Sale doc structure differs based on payment_method (only present when POS+payment_method truthy): linked_cash_movement_id / linked_receivable_id are top-level keys but absent for other sales. Clients must check `in` rather than compare — worth documenting.",
+    "'pos_penjualan', 'pelunasan_piutang', 'pelunasan_utang' categories are excluded from CASH_MOVEMENT_CATEGORIES POST validator (only created internally) — but there is no server-side guard preventing an admin from manually creating a cash_movement with these categories via other paths. Not exploitable today, but worth an explicit deny-list for safety.",
+    "App.js is still one 75-line, ~7000-char-per-line file (~500KB) — see iter19 comment. Not addressed."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter20_pos_payment_methods.py (new)"
+  ],
+  "success_rate": {"backend": "100% (22/22 in serial run)", "frontend": "100% on tested flows"},
+  "test_credentials": "admin@liniar.id / Liniar123!, kasir@liniar.id / Kasir123! — both verified working.",
+  "seed_data_creation": "Directly topped up +30 stock/available on LIN-OVR-001 and LIN-PNT-008 via motor to allow POS tests to run (previously 7/4 available, drained by earlier iterations). Multiple TEST_* customer POS sales created in this iteration (tunai, qris, kartu, transfer, bayar_nanti, offline+tunai regression, kasir bayar_nanti). Two TEST_* piutang_usaha records + several TEST_ cash_movements now exist in DB — not cleaned up.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iter20 tests live in /app/backend/tests/test_iter20_pos_payment_methods.py. RUN WITH `-n 0` (serial) because the double-counting tests read /api/reports kas before/after a POS sale and expect an exact delta — parallel workers create interfering sales. Backend tests fully validate: POS tunai/qris → cash_movement account=kas category=pos_penjualan with linked_sale_id; POS kartu/transfer → cash_movement account=bank; POS bayar_nanti (with valid customer) → receivables_payables type=piutang_usaha, sale.status=Piutang; POS bayar_nanti with 'Walk-in'/''/'Pelanggan Umum' → 422; invalid payment_method → 422; Offline+tunai → success but NO cash_movement. Balance sheet /api/reports correctly avoids double count. Frontend has: [data-testid=payment-donut-panel] (Dashboard, 5 segments + 5 legends + 6 trends), pos-method-{tunai,qris,kartu,transfer,bayar_nanti} (all present), ready-chip-<sku>-<channel> (chips visible in Semua tab, showing e.g. `Shopee · 1`). Login button is text 'Masuk ke workspace' (not button[type=submit]).",
+  "rca of the issue": "Balance-detail kas double-count: server.py:417-418 unconditionally appends every sales_transactions row to kas drilldown, but server.py:426-428 also appends cash_movements with account=kas including the auto-created pos_penjualan movements. The /api/reports endpoint has a matching guard at line 1238 (`if not (s.get('channel') == 'POS' and s.get('payment_method'))`) but the drilldown lacks it. Reproduction: (1) POST /api/sales channel=POS payment_method=qris amount=X → returns linked_cash_movement_id; (2) GET /api/balance-detail?kind=kas → saldo increased by 2X (once from sale row, once from cash_movement row); (3) GET /api/reports balance.detail.assets.lancar.kas → increased by X. Fix: change server.py:417 loop to `for s in ... if not (s.get('channel')=='POS' and s.get('payment_method'))`."
+}

@@ -1,0 +1,23 @@
+{
+  "summary": "Iter21 RETEST: verified fix for /api/balance-detail?kind=kas double-counting POS+payment_method sales. Added the same exclusion filter (server.py L419-420: `if s.get('channel')=='POS' and s.get('payment_method'): continue`) applied inside the kas kind loop. Ran iter20 test suite serially (-n 0): 23/23 PASSED (added 1 new invariant test test_balance_detail_kas_matches_reports_kas_exact which asserts reports.balance.detail.assets.lancar.kas == sum(balance-detail?kind=kas rows with in/out sign) exactly). Fix confirmed: reports.kas == drill.kas (diff=0). No regressions in POS QRIS cash_movement, POS bayar_nanti piutang creation, non-POS sales, receivables/payables, ledger, inventory, or payment_methods summary.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter20_pos_payment_methods.py",
+    "/app/test_reports/pytest/iter21_iter20_regression.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Fix is minimal and correct — single-line exclusion mirrors the same guard used in /api/reports op_cash_in loop, keeping the two code paths consistent.",
+    "Suggestion (non-blocking): extract a helper `_is_pos_auto_cashmovement(sale)` to DRY the identical predicate across reports.py and balance-detail — currently duplicated in 2 places, will drift if a 3rd payment_method behavior is added."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter20_pos_payment_methods.py (added test_balance_detail_kas_matches_reports_kas_exact invariant)"
+  ],
+  "success_rate": {"backend": "100% (23/23)", "frontend": "skipped"},
+  "test_credentials": "admin@liniar.id / Liniar123! (verified)",
+  "seed_data_creation": "none — used existing seed data",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iter20 test file now has 23 tests including exact-match invariant for kas. If future work touches sales_transactions/POS/cash_movements, re-run this file first. The POS+payment_method exclusion pattern is duplicated in server.py at op_cash_in loop AND balance-detail kas loop — keep them in sync."
+}
